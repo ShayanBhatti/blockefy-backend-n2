@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+const mongoose = require("mongoose");
 
 const userSchema = new mongoose.Schema(
   {
@@ -12,6 +12,17 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       // Optional - only for email/password auth
+    },
+    fullName: {
+      type: String,
+      trim: true,
+    },
+    username: {
+      type: String,
+      unique: true,
+      sparse: true,
+      lowercase: true,
+      trim: true,
     },
     role: {
       type: String,
@@ -43,6 +54,14 @@ const userSchema = new mongoose.Schema(
       // Should be encrypted before storing
       // Never send this in responses
     },
+    onboardingStep: {
+      type: Number,
+      default: 1,
+    },
+    onboardingCompleted: {
+      type: Boolean,
+      default: false,
+    },
     createdAt: {
       type: Date,
       default: Date.now,
@@ -56,4 +75,4 @@ const userSchema = new mongoose.Schema(
 // Prevent model overwrite in serverless
 const User = mongoose.models.User || mongoose.model("User", userSchema);
 
-export default User;
+module.exports = User;
