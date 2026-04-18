@@ -4,6 +4,8 @@ const cors = require("cors");
 const passport = require("passport");
 const connectDB = require("./src/config/db");
 const authRoutes = require("./src/routes/authRoutes");
+const gigRoutes = require("./src/routes/gigRoutes");
+const onboardingRoutes = require("./src/routes/onboardingRoutes");
 
 const app = express();
 
@@ -42,6 +44,8 @@ app.use(async (req, res, next) => {
 
 // Mount routes
 app.use("/auth", authRoutes);
+app.use("/gigs", gigRoutes);
+app.use("/onboarding", onboardingRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

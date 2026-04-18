@@ -56,11 +56,31 @@ const userSchema = new mongoose.Schema(
     },
     onboardingStep: {
       type: Number,
-      default: 1,
+      default: 0,
     },
     onboardingCompleted: {
       type: Boolean,
       default: false,
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    isPhoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    isIdVerified: {
+      type: Boolean,
+      default: false,
+    },
+    description: {
+      type: String,
+      trim: true,
+    },
+    skills: {
+      type: [String],
+      default: [],
     },
     createdAt: {
       type: Date,
