@@ -3,7 +3,7 @@ const Gig = require("../models/Gig");
 
 exports.createGig = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId;
     const { title, description, category, tags, pricing, deliveryTime } = req.body;
 
     // Validate required fields

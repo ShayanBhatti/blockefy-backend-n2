@@ -10,7 +10,12 @@ const onboardingRoutes = require("./src/routes/onboardingRoutes");
 const app = express();
 
 // Middleware
-app.use(cors({ origin: "*" }));
+app.use(cors({ 
+  origin: "*",
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

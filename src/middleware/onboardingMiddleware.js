@@ -6,7 +6,7 @@ const User = require("../models/User");
  */
 const checkOnboardingCompleted = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId;
 
     // Get user
     const user = await User.findById(userId);

@@ -2,12 +2,14 @@ const User = require("../models/User");
 
 exports.updateOnboarding = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId;
     const { step, data } = req.body;
 
     // Validate step input
     if (!step || typeof step !== "number") {
-      return res.status(400).json({ error: "Step is required and must be a number" });
+      return res
+        .status(400)
+        .json({ error: "Step is required and must be a number" });
     }
 
     // Get user
@@ -39,8 +41,15 @@ exports.updateOnboarding = async (req, res) => {
 
       case 3:
         // Set fullName, description, skills
-        if (!data || !data.fullName || !data.description || !Array.isArray(data.skills)) {
-          return res.status(400).json({ error: "fullName, description, and skills are required" });
+        if (
+          !data ||
+          !data.fullName ||
+          !data.description ||
+          !Array.isArray(data.skills)
+        ) {
+          return res
+            .status(400)
+            .json({ error: "fullName, description, and skills are required" });
         }
         user.fullName = data.fullName.trim();
         user.description = data.description.trim();
@@ -50,6 +59,8 @@ exports.updateOnboarding = async (req, res) => {
       case 4:
         // Set isPhoneVerified = true
         user.isPhoneVerified = true;
+        break;
+      case 5:
         break;
 
       case 6:
@@ -84,7 +95,7 @@ exports.updateOnboarding = async (req, res) => {
 
 exports.getStatus = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId;
 
     // Get user
     const user = await User.findById(userId);
