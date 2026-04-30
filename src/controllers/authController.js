@@ -6,6 +6,45 @@ const { generateWallet, generateNonce, verifySignature, isValidAddress } = requi
 const { sendVerificationEmail } = require("../utils/email");
 
 /**
+ * ✅ Rate limiting helper - check if user can send another email
+ * Limit: 3 emails per hour
+ */
+const canSendEmail = (user) => {
+  const ONE_HOUR = 60 * 60 * 1000; // milliseconds
+  const MAX_ATTEMPTS = 3;
+
+  if (!user.emailSendAttempts || user.emailSendAttempts.length === 0) {
+    return true;
+  }
+
+  // Filter attempts from last hour
+  const recentAttempts = user.emailSendAttempts.filter(
+    (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR
+  );
+
+  // Check if exceeded limit
+  return recentAttempts.length < MAX_ATTEMPTS;
+};
+
+/**
+ * Record email send attempt for rate limiting
+ */
+const recordEmailAttempt = async (user) => {
+  const ONE_HOUR = 60 * 60 * 1000;
+
+  // Remove attempts older than 1 hour
+  const recentAttempts = (user.emailSendAttempts || []).filter(
+    (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR
+  );
+
+  // Add current attempt
+  recentAttempts.push(new Date());
+  user.emailSendAttempts = recentAttempts;
+
+  await user.save();
+};
+
+/**
  * Generate JWT token
  */
 const generateToken = (userId) => {
@@ -13,11 +52,6 @@ const generateToken = (userId) => {
     expiresIn: "7d",
   });
 };
-
-/**
- * Register new user with email/password and auto-generated wallet
- * POST /auth/register
- */
 const register = async (req, res) => {
   try {
     const { email, password, fullName, username } = req.body;
@@ -76,6 +110,8 @@ const register = async (req, res) => {
     // Send verification email
     try {
       await sendVerificationEmail(user, emailVerificationToken);
+      // ✅ Record attempt for rate limiting
+      await recordEmailAttempt(user);
     } catch (emailError) {
       console.error("Failed to send verification email:", emailError.message);
       // Don't fail registration if email sending fails, but log it
@@ -172,6 +208,7 @@ const login = async (req, res) => {
 /**
  * Generate wallet nonce for signature verification
  * POST /auth/wallet/nonce
+ * ✅ Stores nonce in MongoDB instead of memory
  */
 const generateNonceController = async (req, res) => {
   try {
@@ -194,15 +231,24 @@ const generateNonceController = async (req, res) => {
     // Generate nonce
     const { nonce, expiresAt, message } = generateNonce();
 
-    // Store nonce in memory/cache for verification
-    // In production, use Redis: await redis.setex(walletAddress, 900, nonce);
-    if (!global.nonceCache) {
-      global.nonceCache = {};
+    // Find or create wallet user to store nonce
+    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
+
+    if (!user) {
+      // Create temporary document just for nonce storage
+      user = new User({
+        walletAddress: walletAddress.toLowerCase(),
+        authProvider: "wallet",
+        role: "buyer",
+        onboardingStep: 0,
+        onboardingCompleted: false,
+      });
     }
-    global.nonceCache[walletAddress] = {
-      nonce,
-      expiresAt,
-    };
+
+    // Store nonce in database (15 minutes expiry)
+    user.walletNonce = nonce;
+    user.walletNonceExpires = expiresAt;
+    await user.save();
 
     res.status(200).json({
       msg: "Nonce generated successfully",
@@ -219,6 +265,7 @@ const generateNonceController = async (req, res) => {
 /**
  * Verify wallet signature and authenticate
  * POST /auth/wallet/verify
+ * ✅ Uses nonce from MongoDB
  */
 const verifyWalletSignature = async (req, res) => {
   try {
@@ -255,40 +302,40 @@ const verifyWalletSignature = async (req, res) => {
       });
     }
 
-    // Check nonce expiration
-    if (!global.nonceCache || !global.nonceCache[walletAddress]) {
+    // Find user and check nonce from database
+    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
+
+    if (!user || !user.walletNonce) {
       return res.status(401).json({
-        msg: "Nonce expired or not found",
+        msg: "Nonce not found. Generate a nonce first.",
       });
     }
 
-    const { expiresAt } = global.nonceCache[walletAddress];
-    if (Date.now() > expiresAt) {
-      delete global.nonceCache[walletAddress];
+    // Check nonce expiration
+    if (!user.walletNonceExpires || Date.now() > user.walletNonceExpires) {
+      // Clear expired nonce
+      user.walletNonce = null;
+      user.walletNonceExpires = null;
+      await user.save();
+
       return res.status(401).json({
-        msg: "Nonce expired",
+        msg: "Nonce expired. Please generate a new one.",
       });
     }
 
     // Clear used nonce
-    delete global.nonceCache[walletAddress];
+    user.walletNonce = null;
+    user.walletNonceExpires = null;
 
-    // Find or create user
-    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
-
-    if (!user) {
-      // Create new wallet user
-      user = new User({
-        walletAddress: walletAddress.toLowerCase(),
-        authProvider: "wallet",
-        role: "buyer",
-        onboardingStep: 1,
-        onboardingCompleted: false,
-      });
-      await user.save();
+    // Complete user setup if first time
+    if (user.onboardingStep === 0) {
+      user.onboardingStep = 1;
+      user.emailVerified = true; // Wallet auth is auto-verified
     }
 
-    // Generate token
+    await user.save();
+
+    // Generate JWT token
     const token = generateToken(user._id);
 
     // Return user (excluding sensitive data)
@@ -316,8 +363,82 @@ const verifyWalletSignature = async (req, res) => {
 };
 
 /**
+ * Resend verification email
+ * POST /auth/resend-verification
+ * ✅ Rate limited to 3 attempts per hour
+ */
+const resendVerificationEmail = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Validation
+    if (!email) {
+      return res.status(400).json({
+        msg: "Email is required",
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      // Don't reveal if email exists (security)
+      return res.status(400).json({
+        msg: "If this email is registered, a verification link will be sent.",
+      });
+    }
+
+    // Check if already verified
+    if (user.emailVerified) {
+      return res.status(200).json({
+        msg: "Email already verified",
+      });
+    }
+
+    // ✅ Check rate limiting: max 3 emails per hour
+    if (!canSendEmail(user)) {
+      return res.status(429).json({
+        msg: "Too many verification requests. Please try again later.",
+        retryAfter: 3600, // 1 hour in seconds
+      });
+    }
+
+    // Generate new verification token
+    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(emailVerificationToken)
+      .digest("hex");
+
+    // Update user with new token
+    user.emailVerificationToken = tokenHash;
+    user.emailVerificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Send email
+    try {
+      await sendVerificationEmail(user, emailVerificationToken);
+      // Record attempt for rate limiting
+      await recordEmailAttempt(user);
+
+      res.status(200).json({
+        msg: "Verification email sent successfully. Check your inbox.",
+      });
+    } catch (emailError) {
+      console.error("Failed to send verification email:", emailError.message);
+      res.status(500).json({
+        msg: "Failed to send verification email. Please try again.",
+      });
+    }
+  } catch (error) {
+    console.error("Resend verification error:", error.message);
+    res.status(500).json({ msg: "Server error" });
+  }
+};
+
+/**
  * Verify user email with token
  * GET /auth/verify-email?token=...
+ * ✅ Shows clear error for expired tokens
  */
 const verifyEmail = async (req, res) => {
   try {
@@ -336,15 +457,22 @@ const verifyEmail = async (req, res) => {
       .update(token)
       .digest("hex");
 
-    // Find user with matching token and check expiry
+    // Find user with matching token
     const user = await User.findOne({
       emailVerificationToken: tokenHash,
-      emailVerificationExpires: { $gt: new Date() }, // Token not expired
     });
 
     if (!user) {
       return res.status(400).json({
-        msg: "Invalid or expired verification token",
+        msg: "Invalid verification token",
+      });
+    }
+
+    // ✅ Check if token is expired
+    if (!user.emailVerificationExpires || Date.now() > user.emailVerificationExpires) {
+      return res.status(400).json({
+        msg: "Verification token expired. Please request a new one.",
+        expired: true,
       });
     }
 
@@ -454,6 +582,7 @@ module.exports = {
   register,
   login,
   verifyEmail,
+  resendVerificationEmail,
   generateNonce: generateNonceController,
   verifyWalletSignature,
   handleOAuthCallback,

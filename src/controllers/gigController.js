@@ -17,9 +17,22 @@ exports.createGig = async (req, res) => {
       return res.status(403).json({ error: "User not found" });
     }
 
-    // Check if user is a seller
+    // ✅ ENFORCE: User must be a seller
     if (user.role !== "seller") {
-      return res.status(403).json({ error: "Not a seller" });
+      return res.status(403).json({
+        error: "Only sellers can create gigs",
+        role: user.role,
+      });
+    }
+
+    // ✅ ENFORCE: Seller must have completed profile (at least Step 4)
+    // Step 3 = Profile complete, Step 4+ = Ready to create gigs
+    if (user.onboardingStep < 4) {
+      return res.status(403).json({
+        error: "Complete your seller profile before creating gigs",
+        currentStep: user.onboardingStep,
+        requiredStep: 4,
+      });
     }
 
     // If user is on step 4 of onboarding, advance to step 5

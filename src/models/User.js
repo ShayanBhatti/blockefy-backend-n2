@@ -74,6 +74,28 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    emailSendAttempts: {
+      type: [Date],
+      default: [],
+      // Array of timestamps for rate limiting (max 3 per hour)
+    },
+    phoneNumber: {
+      type: String,
+      default: null,
+    },
+    phoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    walletNonce: {
+      type: String,
+      default: null,
+      // Nonce for wallet signature verification
+    },
+    walletNonceExpires: {
+      type: Date,
+      default: null,
+    },
     isPhoneVerified: {
       type: Boolean,
       default: false,

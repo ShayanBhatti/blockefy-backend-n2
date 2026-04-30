@@ -67,18 +67,19 @@ exports.updateOnboarding = async (req, res) => {
         // Set role
         user.role = data.role;
 
-        // ✅ If buyer, mark onboarding as complete here
+        // ✅ If buyer, mark onboarding as complete here (MAX STEP = 2)
         if (data.role === "buyer") {
           user.onboardingCompleted = true;
         }
+        // ✅ If seller, continue to Step 3
         break;
 
       case 3:
         // STEP 3: Seller profile (fullName, description, skills)
-        // Only sellers proceed beyond Step 2
+        // ✅ ENFORCE: Only sellers can proceed beyond step 2
         if (user.role !== "seller") {
           return res.status(403).json({
-            error: "Only sellers can proceed to Step 3",
+            error: "Only sellers can proceed to Step 3. Buyers complete at Step 2.",
           });
         }
 
@@ -99,25 +100,30 @@ exports.updateOnboarding = async (req, res) => {
         break;
 
       case 4:
-        // STEP 4: Additional verification (placeholder)
+        // STEP 4: First gig creation / Portfolio verification
+        // ✅ ENFORCE: Sellers only
         if (user.role !== "seller") {
           return res.status(403).json({
             error: "Only sellers can proceed to Step 4",
           });
         }
+        // TODO: Validate gig/portfolio data
         break;
 
       case 5:
-        // STEP 5: Additional verification (placeholder)
+        // STEP 5: Additional verification / Gig deployment
+        // ✅ ENFORCE: Sellers only
         if (user.role !== "seller") {
           return res.status(403).json({
             error: "Only sellers can proceed to Step 5",
           });
         }
+        // TODO: Validation for step 5
         break;
 
       case 6:
-        // STEP 6: ID verification (sellers only)
+        // STEP 6: ID verification - final seller step
+        // ✅ ENFORCE: Sellers only
         if (user.role !== "seller") {
           return res.status(403).json({
             error: "Only sellers can proceed to Step 6",
@@ -142,6 +148,7 @@ exports.updateOnboarding = async (req, res) => {
       msg: "Step completed",
       step: user.onboardingStep,
       completed: user.onboardingCompleted,
+      role: user.role,
     });
   } catch (error) {
     console.error("Onboarding error:", error);
@@ -168,6 +175,69 @@ exports.getStatus = async (req, res) => {
     });
   } catch (error) {
     console.error("Get onboarding status error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * Verify phone number (temporary placeholder for Twilio)
+ * POST /onboarding/verify-phone
+ * 
+ * In production, this would validate OTP sent to phone
+ * For now, it's a simple verification endpoint
+ */
+exports.verifyPhone = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { otp } = req.body; // Placeholder: in production, verify OTP validity
+
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(403).json({ error: "User not found" });
+    }
+
+    // Ensure email is verified first
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        error: "Email must be verified before phone verification",
+      });
+    }
+
+    // Ensure user has provided a phone number (Step 1)
+    if (!user.phoneNumber) {
+      return res.status(400).json({
+        error: "Phone number not provided. Complete Step 1 first",
+      });
+    }
+
+    // Ensure phone hasn't already been verified
+    if (user.phoneVerified) {
+      return res.status(400).json({
+        error: "Phone already verified",
+      });
+    }
+
+    // TODO: In production, validate OTP here
+    // For now, accept any OTP (temporary placeholder)
+    if (!otp) {
+      return res.status(400).json({
+        error: "OTP is required",
+      });
+    }
+
+    // Mark phone as verified
+    user.phoneVerified = true;
+
+    // Save user
+    await user.save();
+
+    res.json({
+      msg: "Phone verified successfully",
+      phoneVerified: true,
+    });
+  } catch (error) {
+    console.error("Phone verification error:", error);
     res.status(500).json({ error: "Server error" });
   }
 };
