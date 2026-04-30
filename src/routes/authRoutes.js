@@ -8,6 +8,7 @@ const router = express.Router();
 // Email/Password Authentication
 router.post("/register", authController.register);
 router.post("/login", authController.login);
+router.get("/verify-email", authController.verifyEmail);
 
 // Google OAuth
 router.get(

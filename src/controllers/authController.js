@@ -1,7 +1,9 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const User = require("../models/User");
 const { generateWallet, generateNonce, verifySignature, isValidAddress } = require("../utils/wallet");
+const { sendVerificationEmail } = require("../utils/email");
 
 /**
  * Generate JWT token
@@ -45,6 +47,13 @@ const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Generate email verification token
+    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(emailVerificationToken)
+      .digest("hex");
+
     // Create user
     const user = new User({
       email: email.toLowerCase(),
@@ -57,11 +66,22 @@ const register = async (req, res) => {
       onboardingCompleted: false,
       role: "buyer",
       authProvider: "email",
+      emailVerified: false,
+      emailVerificationToken: tokenHash,
+      emailVerificationExpires: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
     });
 
     await user.save();
 
-    // Generate token
+    // Send verification email
+    try {
+      await sendVerificationEmail(user, emailVerificationToken);
+    } catch (emailError) {
+      console.error("Failed to send verification email:", emailError.message);
+      // Don't fail registration if email sending fails, but log it
+    }
+
+    // Generate JWT token
     const token = generateToken(user._id);
 
     // Return user (excluding sensitive data)
@@ -78,9 +98,10 @@ const register = async (req, res) => {
     };
 
     res.status(201).json({
-      msg: "User registered successfully",
+      msg: "User registered successfully. Please verify your email.",
       token,
       user: userResponse,
+      emailVerificationRequired: true,
     });
   } catch (error) {
     console.error("Register error:", error.message);
@@ -295,7 +316,64 @@ const verifyWalletSignature = async (req, res) => {
 };
 
 /**
+ * Verify user email with token
+ * GET /auth/verify-email?token=...
+ */
+const verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    // Validation
+    if (!token) {
+      return res.status(400).json({
+        msg: "Verification token is required",
+      });
+    }
+
+    // Hash the token to compare with stored hash
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    // Find user with matching token and check expiry
+    const user = await User.findOne({
+      emailVerificationToken: tokenHash,
+      emailVerificationExpires: { $gt: new Date() }, // Token not expired
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        msg: "Invalid or expired verification token",
+      });
+    }
+
+    // Check if already verified
+    if (user.emailVerified) {
+      return res.status(200).json({
+        msg: "Email already verified",
+      });
+    }
+
+    // Mark email as verified and remove token
+    user.emailVerified = true;
+    user.emailVerificationToken = null;
+    user.emailVerificationExpires = null;
+
+    await user.save();
+
+    res.status(200).json({
+      msg: "Email verified successfully",
+    });
+  } catch (error) {
+    console.error("Email verification error:", error.message);
+    res.status(500).json({ msg: "Email verification failed" });
+  }
+};
+
+/**
  * Handle OAuth callback (Google/GitHub)
+ * Google/GitHub users are automatically verified
  * GET /auth/google/callback or /auth/github/callback
  */
 const handleOAuthCallback = async (req, res) => {
@@ -375,6 +453,7 @@ const getCurrentUser = async (req, res) => {
 module.exports = {
   register,
   login,
+  verifyEmail,
   generateNonce: generateNonceController,
   verifyWalletSignature,
   handleOAuthCallback,

@@ -1,6 +1,7 @@
 const express = require("express");
 const onboardingController = require("../controllers/onboardingController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { checkEmailVerified } = require("../middleware/onboardingMiddleware");
 
 const router = express.Router();
 
@@ -8,6 +9,12 @@ const router = express.Router();
 router.get("/status", authMiddleware.verifyToken, onboardingController.getStatus);
 
 // Update onboarding step (protected route)
-router.post("/update", authMiddleware.verifyToken, onboardingController.updateOnboarding);
+// ✅ Requires email verification before progressing
+router.post(
+  "/update",
+  authMiddleware.verifyToken,
+  checkEmailVerified,
+  onboardingController.updateOnboarding
+);
 
 module.exports = router;

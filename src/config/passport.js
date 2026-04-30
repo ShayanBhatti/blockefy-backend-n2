@@ -32,6 +32,7 @@ passport.use(
           googleId: profile.id,
           authProvider: "google",
           role: "buyer",
+          emailVerified: true, // OAuth users are automatically verified
         });
 
         await user.save();
@@ -66,6 +67,7 @@ passport.use(
           githubId: profile.id,
           authProvider: "github",
           role: "buyer",
+          emailVerified: true, // OAuth users are automatically verified
         });
 
         await user.save();
