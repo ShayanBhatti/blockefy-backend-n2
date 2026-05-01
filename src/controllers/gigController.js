@@ -36,10 +36,10 @@ exports.createGig = async (req, res) => {
     }
 
     // If user is on step 4 of onboarding, advance to step 5
-    if (user.onboardingStep === 4) {
-      user.onboardingStep = 5;
-      await user.save();
-    }
+    // if (user.onboardingStep === 4) {
+    //   user.onboardingStep = 5;
+    //   await user.save();
+    // }
 
     // Create gig
     const gig = await Gig.create({

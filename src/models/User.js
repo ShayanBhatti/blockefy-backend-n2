@@ -62,6 +62,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    completedSteps: {
+      type: [Number],
+      default: [],
+      // Array of completed and verified onboarding steps
+    },
     emailVerified: {
       type: Boolean,
       default: false,

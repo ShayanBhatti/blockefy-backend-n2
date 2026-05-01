@@ -26,9 +26,9 @@ exports.updateOnboarding = async (req, res) => {
         emailVerified: false,
       });
     }
-
+     console.log("User onboarding step:", user.onboardingStep);
     // Validate step progression - step must equal user.onboardingStep + 1
-    if (step !== user.onboardingStep + 1) {
+    if (step !== user.onboardingStep+1) {
       return res.status(400).json({ error: "Invalid step progression" });
     }
 
@@ -45,6 +45,7 @@ exports.updateOnboarding = async (req, res) => {
         break;
 
       case 2:
+        console.log("Step 2 data:", data);
         // STEP 2: Verify phone + select role
         if (!data || !data.role || !data.username) {
           return res.status(400).json({
@@ -141,14 +142,40 @@ exports.updateOnboarding = async (req, res) => {
     // Update onboardingStep
     user.onboardingStep = step;
 
+    // ✅ Track completed and verified step
+    if (!user.completedSteps.includes(step)) {
+      user.completedSteps.push(step);
+      user.completedSteps.sort((a, b) => a - b); // Keep sorted
+    }
+
     // Save user
     await user.save();
 
+    // ✅ Calculate next step based on role
+    let nextStep = null;
+    if (user.role === "buyer" && step === 2) {
+      // Buyers end at step 2
+      nextStep = null;
+    } else if (user.role === "seller") {
+      // Sellers: 1 -> 2 -> 3 -> 4 -> 5 -> 6
+      if (step < 6) {
+        nextStep = step + 1;
+      } else {
+        nextStep = null; // All steps complete
+      }
+    } else {
+      // Default progression
+      nextStep = step + 1;
+    }
+
     res.json({
-      msg: "Step completed",
-      step: user.onboardingStep,
-      completed: user.onboardingCompleted,
+      msg: "Step completed successfully and verified",
+      completedStep: step,
+      completedSteps: user.completedSteps,
+      nextStep: nextStep,
+      onboardingCompleted: user.onboardingCompleted,
       role: user.role,
+      status: "verified"
     });
   } catch (error) {
     console.error("Onboarding error:", error);
@@ -166,9 +193,27 @@ exports.getStatus = async (req, res) => {
       return res.status(403).json({ error: "User not found" });
     }
 
+    // ✅ Calculate next step based on role
+    let nextStep = null;
+    if (user.role === "buyer" && user.onboardingStep === 2) {
+      nextStep = null; // Buyers end at step 2
+    } else if (user.role === "seller") {
+      if (user.onboardingStep < 6) {
+        nextStep = user.onboardingStep + 1;
+      } else {
+        nextStep = null;
+      }
+    } else {
+      if (user.onboardingStep < 6) {
+        nextStep = user.onboardingStep + 1;
+      }
+    }
+
     res.json({
       completed: user.onboardingCompleted,
-      step: user.onboardingStep,
+      currentStep: user.onboardingStep,
+      completedSteps: user.completedSteps || [],
+      nextStep: nextStep,
       emailVerified: user.emailVerified,
       phoneVerified: user.isPhoneVerified,
       role: user.role,
