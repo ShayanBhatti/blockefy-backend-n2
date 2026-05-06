@@ -26,13 +26,21 @@ passport.use(
           return done(null, user);
         }
 
-        // Create new user
+        // Extract email from Google profile
+        const email = profile.emails?.[0]?.value;
+        if (!email) {
+          return done(new Error("Email not provided by Google"), null);
+        }
+
+        // Create new user with email and initialize onboarding
         user = new User({
-          email: profile.emails?.[0]?.value,
+          email: email.toLowerCase(),
           googleId: profile.id,
           authProvider: "google",
           role: "buyer",
           emailVerified: true, // OAuth users are automatically verified
+          onboardingStep: 1, // Move to Step 1 for OAuth users
+          onboardingCompleted: false,
         });
 
         await user.save();
@@ -61,13 +69,21 @@ passport.use(
           return done(null, user);
         }
 
-        // Create new user
+        // Extract email from GitHub profile
+        const email = profile.emails?.[0]?.value;
+        if (!email) {
+          return done(new Error("Email not provided by GitHub"), null);
+        }
+
+        // Create new user with email and initialize onboarding
         user = new User({
-          email: profile.emails?.[0]?.value,
+          email: email.toLowerCase(),
           githubId: profile.id,
           authProvider: "github",
           role: "buyer",
           emailVerified: true, // OAuth users are automatically verified
+          onboardingStep: 1, // Move to Step 1 for OAuth users
+          onboardingCompleted: false,
         });
 
         await user.save();

@@ -2,7 +2,12 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const User = require("../models/User");
-const { generateWallet, generateNonce, verifySignature, isValidAddress } = require("../utils/wallet");
+const {
+  generateWallet,
+  generateNonce,
+  verifySignature,
+  isValidAddress,
+} = require("../utils/wallet");
 const { sendVerificationEmail } = require("../utils/email");
 
 /**
@@ -19,7 +24,7 @@ const canSendEmail = (user) => {
 
   // Filter attempts from last hour
   const recentAttempts = user.emailSendAttempts.filter(
-    (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR
+    (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR,
   );
 
   // Check if exceeded limit
@@ -34,7 +39,7 @@ const recordEmailAttempt = async (user) => {
 
   // Remove attempts older than 1 hour
   const recentAttempts = (user.emailSendAttempts || []).filter(
-    (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR
+    (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR,
   );
 
   // Add current attempt
@@ -65,7 +70,10 @@ const register = async (req, res) => {
 
     // Check if user already exists
     const existingUser = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { username: username.toLowerCase() }],
+      $or: [
+        { email: email.toLowerCase() },
+        { username: username.toLowerCase() },
+      ],
     });
 
     if (existingUser) {
@@ -212,7 +220,10 @@ const login = async (req, res) => {
  */
 const generateNonceController = async (req, res) => {
   try {
-    const { walletAddress } = req.body;
+    console.log("Generating nonce for wallet authentication...");
+    console.log("Request body:", req.body);
+    const { address } = req.body;
+    const walletAddress = address;
 
     // Validation
     if (!walletAddress) {
@@ -232,7 +243,9 @@ const generateNonceController = async (req, res) => {
     const { nonce, expiresAt, message } = generateNonce();
 
     // Find or create wallet user to store nonce
-    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
+    let user = await User.findOne({
+      walletAddress: walletAddress.toLowerCase(),
+    });
 
     if (!user) {
       // Create temporary document just for nonce storage
@@ -269,8 +282,8 @@ const generateNonceController = async (req, res) => {
  */
 const verifyWalletSignature = async (req, res) => {
   try {
-    const { walletAddress, signature, message } = req.body;
-
+    const { address, signature, message } = req.body;
+    const walletAddress = address;
     // Validation
     if (!walletAddress || !signature || !message) {
       return res.status(400).json({
@@ -303,7 +316,9 @@ const verifyWalletSignature = async (req, res) => {
     }
 
     // Find user and check nonce from database
-    let user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
+    let user = await User.findOne({
+      walletAddress: walletAddress.toLowerCase(),
+    });
 
     if (!user || !user.walletNonce) {
       return res.status(401).json({
@@ -327,11 +342,10 @@ const verifyWalletSignature = async (req, res) => {
     user.walletNonce = null;
     user.walletNonceExpires = null;
 
-    // Complete user setup if first time
-    if (user.onboardingStep === 0) {
-      user.onboardingStep = 1;
-      user.emailVerified = true; // Wallet auth is auto-verified
-    }
+    // ✅ DO NOT auto-advance onboarding for wallet users
+    // Wallet users stay at Step 0 until they verify email
+    // Email remains null until Step 0 (add-email) completes
+    // emailVerified remains false until email verification
 
     await user.save();
 
@@ -412,7 +426,7 @@ const resendVerificationEmail = async (req, res) => {
 
     // Update user with new token
     user.emailVerificationToken = tokenHash;
-    user.emailVerificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    user.emailVerificationExpires = new Date(Date.now() + 10 * 60 * 2000); // 10 minutes
 
     // Send email
     try {
@@ -452,10 +466,7 @@ const verifyEmail = async (req, res) => {
     }
 
     // Hash the token to compare with stored hash
-    const tokenHash = crypto
-      .createHash("sha256")
-      .update(token)
-      .digest("hex");
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
     // Find user with matching token
     const user = await User.findOne({
@@ -469,7 +480,10 @@ const verifyEmail = async (req, res) => {
     }
 
     // ✅ Check if token is expired
-    if (!user.emailVerificationExpires || Date.now() > user.emailVerificationExpires) {
+    if (
+      !user.emailVerificationExpires ||
+      Date.now() > user.emailVerificationExpires
+    ) {
       return res.status(400).json({
         msg: "Verification token expired. Please request a new one.",
         expired: true,
@@ -488,10 +502,17 @@ const verifyEmail = async (req, res) => {
     user.emailVerificationToken = null;
     user.emailVerificationExpires = null;
 
+    // ✅ For wallet users at Step 0, advance to Step 1 after email verification
+    if (user.authProvider === "wallet" && user.onboardingStep === 0) {
+      user.onboardingStep = 1;
+    }
+
     await user.save();
 
     res.status(200).json({
       msg: "Email verified successfully",
+      emailVerified: true,
+      onboardingStep: user.onboardingStep,
     });
   } catch (error) {
     console.error("Email verification error:", error.message);

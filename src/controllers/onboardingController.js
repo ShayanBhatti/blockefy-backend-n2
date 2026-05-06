@@ -101,14 +101,42 @@ exports.updateOnboarding = async (req, res) => {
         break;
 
       case 4:
-        // STEP 4: First gig creation / Portfolio verification
+        // STEP 4: Complete Seller Profile
         // ✅ ENFORCE: Sellers only
         if (user.role !== "seller") {
           return res.status(403).json({
             error: "Only sellers can proceed to Step 4",
           });
         }
-        // TODO: Validate gig/portfolio data
+
+        // Validate required profile fields for step 4
+        // These are MANDATORY for profile completion
+        const headline = user.profile?.headline || null;
+        const about = user.profile?.about || null;
+        const skills = user.sellerProfile?.skills || [];
+
+        if (!headline || headline.trim() === "") {
+          return res.status(400).json({
+            error: "Profile headline is required to complete Step 4",
+            missingFields: ["profile.headline"],
+          });
+        }
+
+        if (!about || about.trim() === "") {
+          return res.status(400).json({
+            error: "Profile about/bio is required to complete Step 4",
+            missingFields: ["profile.about"],
+          });
+        }
+
+        if (!Array.isArray(skills) || skills.length === 0) {
+          return res.status(400).json({
+            error: "At least one skill is required to complete Step 4",
+            missingFields: ["sellerProfile.skills"],
+          });
+        }
+
+        // ✅ All profile fields validated - Step 4 complete
         break;
 
       case 5:
@@ -212,6 +240,7 @@ exports.getStatus = async (req, res) => {
     res.json({
       completed: user.onboardingCompleted,
       currentStep: user.onboardingStep,
+      onboardingStep: user.onboardingStep,
       completedSteps: user.completedSteps || [],
       nextStep: nextStep,
       emailVerified: user.emailVerified,
@@ -283,6 +312,109 @@ exports.verifyPhone = async (req, res) => {
     });
   } catch (error) {
     console.error("Phone verification error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * STEP 0: Add email for wallet users
+ * POST /onboarding/add-email
+ * 
+ * Wallet users collect email during onboarding Step 0
+ * This endpoint:
+ * - Validates email doesn't already exist
+ * - Saves email to user
+ * - Generates verification token
+ * - Sends verification email
+ * - DO NOT advance to next step (user must verify email)
+ */
+exports.addEmail = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { email } = req.body;
+
+    // Validation
+    if (!email) {
+      return res.status(400).json({
+        error: "Email is required",
+      });
+    }
+
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(403).json({ error: "User not found" });
+    }
+
+    // ✅ ENFORCE: Only wallet users at Step 0 can add email
+    if (user.authProvider !== "wallet") {
+      return res.status(403).json({
+        error: "Only wallet users can use this endpoint",
+      });
+    }
+
+    if (user.onboardingStep !== 0) {
+      return res.status(403).json({
+        error: "Email can only be added at Step 0. Current step: " + user.onboardingStep,
+      });
+    }
+
+    // ✅ Prevent overwriting existing email
+    if (user.email) {
+      return res.status(400).json({
+        error: "User already has an email address",
+      });
+    }
+
+    // ✅ Prevent duplicate emails (check unique constraint)
+    const normalizedEmail = email.toLowerCase().trim();
+    const existingUser = await User.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      return res.status(409).json({
+        error: "This email is already registered",
+      });
+    }
+
+    // Generate email verification token (same as register flow)
+    const crypto = require("crypto");
+    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(emailVerificationToken)
+      .digest("hex");
+
+    // Save email and token to user
+    user.email = normalizedEmail;
+    user.emailVerificationToken = tokenHash;
+    user.emailVerificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await user.save();
+
+    // Send verification email (reuse existing logic)
+    try {
+      const { sendVerificationEmail } = require("../utils/email");
+      await sendVerificationEmail(user, emailVerificationToken);
+
+      res.status(200).json({
+        msg: "Verification email sent. Please check your inbox to verify your email.",
+        email: normalizedEmail,
+        step: 0,
+        nextAction: "Verify email to proceed to Step 1",
+      });
+    } catch (emailError) {
+      console.error("Failed to send verification email:", emailError.message);
+      // Remove email if email sending fails
+      user.email = null;
+      user.emailVerificationToken = null;
+      user.emailVerificationExpires = null;
+      await user.save();
+
+      res.status(500).json({
+        error: "Failed to send verification email. Please try again.",
+      });
+    }
+  } catch (error) {
+    console.error("Add email error:", error);
     res.status(500).json({ error: "Server error" });
   }
 };

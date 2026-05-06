@@ -5,6 +5,13 @@ const { checkEmailVerified } = require("../middleware/onboardingMiddleware");
 
 const router = express.Router();
 
+// 🆕 STEP 0: Add email for wallet users (protected route)
+router.post(
+  "/add-email",
+  authMiddleware.verifyToken,
+  onboardingController.addEmail
+);
+
 // Get onboarding status (protected route)
 router.get("/status", authMiddleware.verifyToken, onboardingController.getStatus);
 

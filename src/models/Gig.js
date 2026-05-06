@@ -43,10 +43,30 @@ const gigSchema = new mongoose.Schema(
       type: Number,
       // in days
     },
+    images: {
+      type: [
+        {
+          data: {
+            type: String,
+            required: true,
+          },
+          contentType: {
+            type: String,
+            required: true,
+          },
+          isPrimary: {
+            type: Boolean,
+            default: false,
+          },
+        },
+      ],
+      validate: [(val) => val.length <= 3, "Max 3 images allowed"],
+      default: [],
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt fields
-  }
+  },
 );
 
 // Prevent model overwrite in serverless

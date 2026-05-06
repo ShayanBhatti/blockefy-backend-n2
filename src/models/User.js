@@ -116,7 +116,138 @@ const userSchema = new mongoose.Schema(
     skills: {
       type: [String],
       default: [],
+      // DEPRECATED: Use sellerProfile.skills instead
+      // Kept for backward compatibility
     },
+    // User profile information
+    profile: {
+      avatar: {
+        type: String,
+        default: null,
+      },
+      coverPhoto: {
+        type: String,
+        default: null,
+      },
+      headline: {
+        type: String,
+        default: null,
+      },
+      tagline: {
+        type: String,
+        default: null,
+      },
+      about: {
+        type: String,
+        default: null,
+      },
+    },
+
+    // Seller-specific profile
+    sellerProfile: {
+      skills: {
+        type: [String],
+        default: [],
+      },
+      experience: [
+        {
+          title: {
+            type: String,
+            required: true,
+          },
+          company: {
+            type: String,
+            required: true,
+          },
+          startDate: {
+            type: Date,
+            required: true,
+          },
+          endDate: {
+            type: Date,
+            default: null,
+          },
+          description: {
+            type: String,
+            default: null,
+          },
+          _id: false,
+        },
+      ],
+      education: [
+        {
+          school: {
+            type: String,
+            required: true,
+          },
+          degree: {
+            type: String,
+            required: true,
+          },
+          startYear: {
+            type: Number,
+            required: true,
+          },
+          endYear: {
+            type: Number,
+            default: null,
+          },
+          _id: false,
+        },
+      ],
+      portfolio: [
+        {
+          title: {
+            type: String,
+            required: true,
+          },
+          description: {
+            type: String,
+            default: null,
+          },
+          image: {
+            type: String,
+            default: null,
+          },
+          link: {
+            type: String,
+            default: null,
+          },
+          _id: false,
+        },
+      ],
+      languages: {
+        type: [String],
+        default: [],
+      },
+    },
+
+    // Buyer-specific profile
+    buyerProfile: {
+      company: {
+        type: String,
+        default: null,
+      },
+      interests: {
+        type: [String],
+        default: [],
+      },
+      budgetRange: {
+        min: {
+          type: Number,
+          default: null,
+        },
+        max: {
+          type: Number,
+          default: null,
+        },
+      },
+      preferredCategories: {
+        type: [String],
+        default: [],
+      },
+    },
+
     createdAt: {
       type: Date,
       default: Date.now,
