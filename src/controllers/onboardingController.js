@@ -295,6 +295,7 @@ exports.getStatus = async (req, res) => {
       provider: user.authProvider,
       completedSteps: user.completedSteps || [],
       nextStep: nextStep,
+      email:user.email || null,
       emailVerified: user.emailVerified,
       phoneVerified: user.isPhoneVerified,
       role: user.role,
@@ -429,42 +430,50 @@ exports.addEmail = async (req, res) => {
       });
     }
 
-    // Generate email verification token (same as register flow)
-    const crypto = require("crypto");
-    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
-    const tokenHash = crypto
-      .createHash("sha256")
-      .update(emailVerificationToken)
-      .digest("hex");
+    // ✅ Generate OTP for email verification (same as register flow)
+    const { generateOtp } = require("../utils/generateOtp");
+    const { otp, expiresAt } = generateOtp();
 
-    // Save email and token to user
+    // Save email and OTP to user
     user.email = normalizedEmail;
-    user.emailVerificationToken = tokenHash;
-    user.emailVerificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    user.emailOtp = otp;
+    user.emailOtpExpires = expiresAt;
+    user.emailOtpAttempts = 0;
+    user.emailVerified = false;
+    user.lastOtpSentAt = new Date(); // Record OTP send time for cooldown
 
     await user.save();
 
-    // Send verification email (reuse existing logic)
+    // Send OTP email (reuse existing logic)
     try {
-      const { sendVerificationEmail } = require("../utils/email");
-      await sendVerificationEmail(user, emailVerificationToken);
+      const { sendOtpEmail } = require("../utils/email");
+      await sendOtpEmail(user, otp);
+
+      // ✅ Record attempt for rate limiting
+      const ONE_HOUR = 60 * 60 * 1000;
+      const recentAttempts = (user.otpSendAttempts || []).filter(
+        (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR,
+      );
+      recentAttempts.push(new Date());
+      user.otpSendAttempts = recentAttempts;
+      await user.save();
 
       res.status(200).json({
-        msg: "Verification email sent. Please check your inbox to verify your email.",
+        msg: "OTP sent to your email. Please check your inbox.",
         email: normalizedEmail,
         step: 0,
-        nextAction: "Verify email to proceed to Step 1",
+        nextAction: "Enter OTP to verify email and proceed to Step 1",
       });
     } catch (emailError) {
-      console.error("Failed to send verification email:", emailError.message);
-      // Remove email if email sending fails
+      console.error("Failed to send OTP email:", emailError.message);
+      // Remove email and OTP if email sending fails
       user.email = null;
-      user.emailVerificationToken = null;
-      user.emailVerificationExpires = null;
+      user.emailOtp = null;
+      user.emailOtpExpires = null;
       await user.save();
 
       res.status(500).json({
-        error: "Failed to send verification email. Please try again.",
+        error: "Failed to send OTP email. Please try again.",
       });
     }
   } catch (error) {

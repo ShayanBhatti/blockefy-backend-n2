@@ -71,18 +71,30 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    emailVerificationToken: {
+    emailOtp: {
       type: String,
       default: null,
+      // 6-digit OTP for email verification
     },
-    emailVerificationExpires: {
+    emailOtpExpires: {
       type: Date,
       default: null,
+      // OTP expiry timestamp (15 minutes from generation)
     },
-    emailSendAttempts: {
+    emailOtpAttempts: {
+      type: Number,
+      default: 0,
+      // Tracks failed OTP verification attempts for brute-force prevention
+    },
+    otpSendAttempts: {
       type: [Date],
       default: [],
-      // Array of timestamps for rate limiting (max 3 per hour)
+      // Array of timestamps for rate limiting OTP sends (max 3 per hour)
+    },
+    lastOtpSentAt: {
+      type: Date,
+      default: null,
+      // Timestamp of last OTP send for 60-second cooldown enforcement
     },
     phoneNumber: {
       type: String,

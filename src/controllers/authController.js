@@ -8,22 +8,23 @@ const {
   verifySignature,
   isValidAddress,
 } = require("../utils/wallet");
-const { sendVerificationEmail } = require("../utils/email");
+const { sendOtpEmail } = require("../utils/email");
+const { generateOtp } = require("../utils/generateOtp");
 
 /**
- * ✅ Rate limiting helper - check if user can send another email
- * Limit: 3 emails per hour
+ * ✅ Rate limiting helper - check if user can send another OTP
+ * Limit: 3 OTP sends per hour
  */
-const canSendEmail = (user) => {
+const canSendOtp = (user) => {
   const ONE_HOUR = 60 * 60 * 1000; // milliseconds
   const MAX_ATTEMPTS = 3;
 
-  if (!user.emailSendAttempts || user.emailSendAttempts.length === 0) {
+  if (!user.otpSendAttempts || user.otpSendAttempts.length === 0) {
     return true;
   }
 
   // Filter attempts from last hour
-  const recentAttempts = user.emailSendAttempts.filter(
+  const recentAttempts = user.otpSendAttempts.filter(
     (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR,
   );
 
@@ -32,19 +33,19 @@ const canSendEmail = (user) => {
 };
 
 /**
- * Record email send attempt for rate limiting
+ * Record OTP send attempt for rate limiting
  */
-const recordEmailAttempt = async (user) => {
+const recordOtpAttempt = async (user) => {
   const ONE_HOUR = 60 * 60 * 1000;
 
   // Remove attempts older than 1 hour
-  const recentAttempts = (user.emailSendAttempts || []).filter(
+  const recentAttempts = (user.otpSendAttempts || []).filter(
     (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR,
   );
 
   // Add current attempt
   recentAttempts.push(new Date());
-  user.emailSendAttempts = recentAttempts;
+  user.otpSendAttempts = recentAttempts;
 
   await user.save();
 };
@@ -89,12 +90,8 @@ const register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Generate email verification token
-    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
-    const tokenHash = crypto
-      .createHash("sha256")
-      .update(emailVerificationToken)
-      .digest("hex");
+    // ✅ Generate OTP for email verification
+    const { otp, expiresAt } = generateOtp();
 
     // Create user
     const user = new User({
@@ -109,19 +106,20 @@ const register = async (req, res) => {
       role: "buyer",
       authProvider: "email",
       emailVerified: false,
-      emailVerificationToken: tokenHash,
-      emailVerificationExpires: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+      emailOtp: otp,
+      emailOtpExpires: expiresAt,
+      lastOtpSentAt: new Date(), // Record OTP send time for cooldown
     });
 
     await user.save();
 
-    // Send verification email
+    // Send OTP email
     try {
-      await sendVerificationEmail(user, emailVerificationToken);
+      await sendOtpEmail(user, otp);
       // ✅ Record attempt for rate limiting
-      await recordEmailAttempt(user);
+      await recordOtpAttempt(user);
     } catch (emailError) {
-      console.error("Failed to send verification email:", emailError.message);
+      console.error("Failed to send OTP email:", emailError.message);
       // Don't fail registration if email sending fails, but log it
     }
 
@@ -142,7 +140,7 @@ const register = async (req, res) => {
     };
 
     res.status(201).json({
-      msg: "User registered successfully. Please verify your email.",
+      msg: "User registered successfully. OTP sent to email.",
       token,
       user: userResponse,
       emailVerificationRequired: true,
@@ -377,11 +375,11 @@ const verifyWalletSignature = async (req, res) => {
 };
 
 /**
- * Resend verification email
- * POST /auth/resend-verification
+ * Resend OTP for email verification
+ * POST /auth/resend-otp
  * ✅ Rate limited to 3 attempts per hour
  */
-const resendVerificationEmail = async (req, res) => {
+const resendOtp = async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -398,7 +396,7 @@ const resendVerificationEmail = async (req, res) => {
     if (!user) {
       // Don't reveal if email exists (security)
       return res.status(400).json({
-        msg: "If this email is registered, a verification link will be sent.",
+        msg: "If this email is registered, an OTP will be sent.",
       });
     }
 
@@ -409,50 +407,169 @@ const resendVerificationEmail = async (req, res) => {
       });
     }
 
-    // ✅ Check rate limiting: max 3 emails per hour
-    if (!canSendEmail(user)) {
+    // ✅ COOLDOWN CHECK: 60-second delay between OTP sends
+    const COOLDOWN_SECONDS = 60;
+    if (user.lastOtpSentAt) {
+      const timeSinceLastSend = Date.now() - new Date(user.lastOtpSentAt).getTime();
+      const cooldownMillis = COOLDOWN_SECONDS * 1000;
+
+      if (timeSinceLastSend < cooldownMillis) {
+        const retryAfterSeconds = Math.ceil((cooldownMillis - timeSinceLastSend) / 1000);
+        return res.status(429).json({
+          success: false,
+          msg: "Please wait before requesting another OTP.",
+          retryAfter: retryAfterSeconds,
+          retryAfterSeconds: retryAfterSeconds, // Explicit field for frontend
+        });
+      }
+    }
+
+    // ✅ RATE LIMIT CHECK: max 3 OTP sends per hour
+    if (!canSendOtp(user)) {
       return res.status(429).json({
-        msg: "Too many verification requests. Please try again later.",
+        success: false,
+        msg: "Too many OTP requests. Please try again in 1 hour.",
         retryAfter: 3600, // 1 hour in seconds
+        retryAfterSeconds: 3600,
       });
     }
 
-    // Generate new verification token
-    const emailVerificationToken = crypto.randomBytes(32).toString("hex");
-    const tokenHash = crypto
-      .createHash("sha256")
-      .update(emailVerificationToken)
-      .digest("hex");
+    // ✅ Generate new OTP (invalidates previous OTP)
+    const { otp, expiresAt } = generateOtp();
 
-    // Update user with new token
-    user.emailVerificationToken = tokenHash;
-    user.emailVerificationExpires = new Date(Date.now() + 10 * 60 * 2000); // 10 minutes
+    // Update user with new OTP
+    user.emailOtp = otp;
+    user.emailOtpExpires = expiresAt;
+    user.emailOtpAttempts = 0; // Reset failed attempts on new OTP
+    user.lastOtpSentAt = new Date(); // Record send timestamp for cooldown
 
-    // Send email
+    // Send OTP email
     try {
-      await sendVerificationEmail(user, emailVerificationToken);
-      // Record attempt for rate limiting
-      await recordEmailAttempt(user);
+      await sendOtpEmail(user, otp);
+      // Record attempt for hourly rate limiting
+      await recordOtpAttempt(user);
 
       res.status(200).json({
-        msg: "Verification email sent successfully. Check your inbox.",
+        success: true,
+        msg: "OTP sent successfully. Check your inbox.",
+        expiresIn: 900, // 15 minutes in seconds
       });
     } catch (emailError) {
-      console.error("Failed to send verification email:", emailError.message);
+      console.error("Failed to send OTP email:", emailError.message);
+      // Reset tracking if email send fails
+      user.lastOtpSentAt = null;
+      await user.save();
+
       res.status(500).json({
-        msg: "Failed to send verification email. Please try again.",
+        success: false,
+        msg: "Failed to send OTP. Please try again.",
       });
     }
   } catch (error) {
-    console.error("Resend verification error:", error.message);
+    console.error("Resend OTP error:", error.message);
     res.status(500).json({ msg: "Server error" });
+  }
+
+    console.error("Resend OTP error:", error.message);
+    res.status(500).json({ msg: "Server error" });
+};  
+
+/**
+ * Verify OTP for email verification
+ * POST /auth/verify-otp
+ *
+ * Request body:
+ * {
+ *   "email": "user@example.com",
+ *   "otp": "483921"
+ * }
+ */
+const verifyOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    // Validation
+    if (!email || !otp) {
+      return res.status(400).json({
+        msg: "Email and OTP are required",
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      return res.status(400).json({
+        msg: "User not found",
+      });
+    }
+
+    // Check if already verified
+    if (user.emailVerified) {
+      return res.status(200).json({
+        msg: "Email already verified",
+      });
+    }
+
+    // Check if OTP exists
+    if (!user.emailOtp) {
+      return res.status(400).json({
+        msg: "No OTP found. Please request a new OTP.",
+      });
+    }
+
+    // ✅ Check if OTP is expired
+    if (!user.emailOtpExpires || Date.now() > user.emailOtpExpires) {
+      user.emailOtp = null;
+      user.emailOtpExpires = null;
+      user.emailOtpAttempts = 0;
+      await user.save();
+
+      return res.status(400).json({
+        msg: "OTP expired. Please request a new OTP.",
+        expired: true,
+      });
+    }
+
+    // ✅ Compare OTP
+    if (user.emailOtp !== otp.trim()) {
+      user.emailOtpAttempts = (user.emailOtpAttempts || 0) + 1;
+      await user.save();
+
+      return res.status(400).json({
+        msg: "Invalid OTP",
+        attempts: user.emailOtpAttempts,
+      });
+    }
+
+    // ✅ OTP is valid - mark email as verified
+    user.emailVerified = true;
+    user.emailOtp = null;
+    user.emailOtpExpires = null;
+    user.emailOtpAttempts = 0;
+
+    // ✅ For wallet users at Step 0, advance to Step 1 after email verification
+    if (user.authProvider === "wallet" && user.onboardingStep === 0) {
+      user.onboardingStep = 0;
+    }
+
+    await user.save();
+
+    res.status(200).json({
+      msg: "Email verified successfully",
+      emailVerified: true,
+      onboardingStep: user.onboardingStep,
+    });
+  } catch (error) {
+    console.error("OTP verification error:", error.message);
+    res.status(500).json({ msg: "OTP verification failed" });
   }
 };
 
 /**
- * Verify user email with token
+ * Verify user email with token (deprecated - kept for backward compatibility)
  * GET /auth/verify-email?token=...
- * ✅ Shows clear error for expired tokens
+ * ✅ This endpoint is deprecated. Use /auth/verify-otp instead.
  */
 const verifyEmail = async (req, res) => {
   try {
@@ -603,7 +720,8 @@ module.exports = {
   register,
   login,
   verifyEmail,
-  resendVerificationEmail,
+  verifyOtp,
+  resendOtp,
   generateNonce: generateNonceController,
   verifyWalletSignature,
   handleOAuthCallback,

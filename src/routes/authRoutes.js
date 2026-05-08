@@ -8,8 +8,13 @@ const router = express.Router();
 // Email/Password Authentication
 router.post("/register", authController.register);
 router.post("/login", authController.login);
+
+// OTP-based Email Verification (NEW)
+router.post("/verify-otp", authController.verifyOtp);
+router.post("/resend-otp", authController.resendOtp);
+
+// Legacy - kept for backward compatibility
 router.get("/verify-email", authController.verifyEmail);
-router.post("/resend-verification", authController.resendVerificationEmail);
 
 // Google OAuth
 router.get(

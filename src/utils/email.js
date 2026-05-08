@@ -67,6 +67,61 @@ const sendVerificationEmail = async (user, verificationToken) => {
 };
 
 /**
+ * Send OTP email for verification
+ * @param {Object} user - User object with email and fullName
+ * @param {String} otp - 6-digit OTP to send
+ * @returns {Promise} Result of email sending
+ */
+const sendOtpEmail = async (user, otp) => {
+  try {
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: user.email,
+      subject: "Verify Your Blockefy Account",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Email Verification Code</h2>
+          <p>Hi ${user.fullName || "User"},</p>
+          <p>Your verification code is:</p>
+          <div style="background-color: #f5f5f5; padding: 20px; text-align: center; border-radius: 5px; margin: 20px 0;">
+            <h1 style="letter-spacing: 5px; color: #007bff; margin: 0;">${otp}</h1>
+          </div>
+          <p>This code expires in <strong>15 minutes</strong>.</p>
+          <p>Do not share this code with anyone.</p>
+          <hr />
+          <p>If you didn't request this code, please ignore this email.</p>
+          <p>Best regards,<br/>Blockefy Team</p>
+        </div>
+      `,
+      text: `
+        Email Verification Code
+        
+        Hi ${user.fullName || "User"},
+        
+        Your verification code is:
+        ${otp}
+        
+        This code expires in 15 minutes.
+        
+        Do not share this code with anyone.
+        
+        If you didn't request this code, please ignore this email.
+        
+        Best regards,
+        Blockefy Team
+      `,
+    };
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log("OTP email sent:", result.messageId);
+    return result;
+  } catch (error) {
+    console.error("Error sending OTP email:", error);
+    throw error;
+  }
+};
+
+/**
  * Send password reset email
  * @param {Object} user - User object with email
  * @param {String} resetToken - Token for password reset
@@ -122,5 +177,6 @@ const sendPasswordResetEmail = async (user, resetToken) => {
 module.exports = {
   transporter,
   sendVerificationEmail,
+  sendOtpEmail,
   sendPasswordResetEmail,
 };
