@@ -4,10 +4,9 @@ const mongoose = require("mongoose");
 
 // --- CONFIGURATION ---
 const MONGO_URI =
-  process.env.MONGO_URI ||
-  "mongodb+srv://TestUser:3VneFzE0sLY2biFq@blockefy.hbslfgf.mongodb.net/?appName=Blockefy";
-const TARGET_USER_ID = "69f4833c252feae49e888b3a"; // from your user table
-const NUMBER_OF_GIGS = 25;
+  process.env.MONGO_URI || "mongodb://localhost:27017/your-db-name"; // replace with your MongoDB URI
+const TARGET_USER_ID = ""; // from your user table
+const NUMBER_OF_GIGS = 20;
 
 // --- Placeholder Image (1x1 transparent PNG) ---
 // Replace this with your own base64 images (up to 3 per gig)
