@@ -113,12 +113,6 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-    skills: {
-      type: [String],
-      default: [],
-      // DEPRECATED: Use sellerProfile.skills instead
-      // Kept for backward compatibility
-    },
     // User profile information
     profile: {
       avatar: {
@@ -141,6 +135,7 @@ const userSchema = new mongoose.Schema(
         type: String,
         default: null,
       },
+    
     },
 
     // Seller-specific profile

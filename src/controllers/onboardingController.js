@@ -26,9 +26,9 @@ exports.updateOnboarding = async (req, res) => {
         emailVerified: false,
       });
     }
-     console.log("User onboarding step:", user.onboardingStep);
+    console.log("User onboarding step:", user);
     // Validate step progression - step must equal user.onboardingStep + 1
-    if (step !== user.onboardingStep+1) {
+    if (step !== user.onboardingStep + 1) {
       return res.status(400).json({ error: "Invalid step progression" });
     }
 
@@ -36,7 +36,11 @@ exports.updateOnboarding = async (req, res) => {
     switch (step) {
       case 1:
         // STEP 1: Request phone number for verification
-        if (!data || !data.phoneNumber || typeof data.phoneNumber !== "string") {
+        if (
+          !data ||
+          !data.phoneNumber ||
+          typeof data.phoneNumber !== "string"
+        ) {
           return res.status(400).json({ error: "Phone number is required" });
         }
         // Store phone number (not verified yet)
@@ -45,8 +49,6 @@ exports.updateOnboarding = async (req, res) => {
         break;
 
       case 2:
-        console.log("Step 2 data:", data);
-        // STEP 2: Verify phone + select role
         if (!data || !data.role || !data.username) {
           return res.status(400).json({
             error: "Role (buyer/seller) and username are required",
@@ -56,7 +58,9 @@ exports.updateOnboarding = async (req, res) => {
         // Validate role
         const validRoles = ["buyer", "seller"];
         if (!validRoles.includes(data.role)) {
-          return res.status(400).json({ error: "Role must be 'buyer' or 'seller'" });
+          return res
+            .status(400)
+            .json({ error: "Role must be 'buyer' or 'seller'" });
         }
 
         // Set username
@@ -80,15 +84,16 @@ exports.updateOnboarding = async (req, res) => {
         // ✅ ENFORCE: Only sellers can proceed beyond step 2
         if (user.role !== "seller") {
           return res.status(403).json({
-            error: "Only sellers can proceed to Step 3. Buyers complete at Step 2.",
+            error:
+              "Only sellers can proceed to Step 3. Buyers complete at Step 2.",
           });
         }
 
         if (
           !data ||
           !data.fullName ||
-          !data.description ||
-          !Array.isArray(data.skills)
+          !data.description
+          // !Array.isArray(data.skills)
         ) {
           return res.status(400).json({
             error: "fullName, description, and skills are required",
@@ -97,7 +102,7 @@ exports.updateOnboarding = async (req, res) => {
 
         user.fullName = data.fullName.trim();
         user.description = data.description.trim();
-        user.skills = data.skills;
+        // user.skills = data.skills;
         break;
 
       case 4:
@@ -108,37 +113,83 @@ exports.updateOnboarding = async (req, res) => {
             error: "Only sellers can proceed to Step 4",
           });
         }
+        const {
+          headline,
+          about,
+          tagline,
+          avatar, // base64 string or URL
+          coverPhoto, // base64 string or URL
+          skills: incomingSkills,
+        } = req.body.data || {};
 
-        // Validate required profile fields for step 4
-        // These are MANDATORY for profile completion
-        const headline = user.profile?.headline || null;
-        const about = user.profile?.about || null;
-        const skills = user.sellerProfile?.skills || [];
-
-        if (!headline || headline.trim() === "") {
+        // ---------- Required Fields Validation ----------
+        // Priority: incoming payload > existing DB value > null
+      
+        const finalHeadline =
+          headline !== undefined ? headline : user.profile?.headline;
+        if (!finalHeadline || finalHeadline.trim() === "") {
           return res.status(400).json({
             error: "Profile headline is required to complete Step 4",
-            missingFields: ["profile.headline"],
+            missingFields: ["headline"],
           });
         }
 
-        if (!about || about.trim() === "") {
+        const finalAbout = about !== undefined ? about : user.profile?.about;
+        if (!finalAbout || finalAbout.trim() === "") {
           return res.status(400).json({
             error: "Profile about/bio is required to complete Step 4",
-            missingFields: ["profile.about"],
+            missingFields: ["about"],
           });
         }
 
-        if (!Array.isArray(skills) || skills.length === 0) {
+        let finalSkills =
+          incomingSkills !== undefined
+            ? incomingSkills
+            : user.sellerProfile?.skills;
+        if (!Array.isArray(finalSkills) || finalSkills.length === 0) {
           return res.status(400).json({
             error: "At least one skill is required to complete Step 4",
-            missingFields: ["sellerProfile.skills"],
+            missingFields: ["skills"],
           });
         }
 
-        // ✅ All profile fields validated - Step 4 complete
-        break;
+        // Optional: length validations (add if needed)
+        if (finalHeadline.length < 5) {
+          return res.status(400).json({
+            error: "Headline must be at least 5 characters",
+          });
+        }
+        if (finalAbout.length < 10 || finalAbout.length > 500) {
+          return res.status(400).json({
+            error: "About must be between 10 and 500 characters",
+          });
+        }
+        if (tagline && tagline.length > 100) {
+          return res.status(400).json({
+            error: "Tagline must be less than 100 characters",
+          });
+        }
+        // ---------- Prepare Updates ----------
+        const profileUpdate = {};
+        if (headline !== undefined) profileUpdate.headline = finalHeadline;
+        if (about !== undefined) profileUpdate.about = finalAbout;
+        if (tagline !== undefined) profileUpdate.tagline = tagline;
+        if (avatar !== undefined) profileUpdate.avatar = avatar; // save base64 or URL
+        if (coverPhoto !== undefined) profileUpdate.coverPhoto = coverPhoto;
 
+        const sellerProfileUpdate = {};
+        if (incomingSkills !== undefined)
+          sellerProfileUpdate.skills = finalSkills;
+        // ---------- Apply Updates ----------
+        user.profile = {
+          ...user.profile,
+          ...profileUpdate,
+        };
+        user.sellerProfile = {
+          ...user.sellerProfile,
+          ...sellerProfileUpdate,
+        };
+        break;
       case 5:
         // STEP 5: Additional verification / Gig deployment
         // ✅ ENFORCE: Sellers only
@@ -203,7 +254,7 @@ exports.updateOnboarding = async (req, res) => {
       nextStep: nextStep,
       onboardingCompleted: user.onboardingCompleted,
       role: user.role,
-      status: "verified"
+      status: "verified",
     });
   } catch (error) {
     console.error("Onboarding error:", error);
@@ -238,9 +289,10 @@ exports.getStatus = async (req, res) => {
     }
 
     res.json({
-      completed: user.onboardingCompleted,
+      onboardingCompleted: user.onboardingCompleted,
       currentStep: user.onboardingStep,
       onboardingStep: user.onboardingStep,
+      provider: user.authProvider,
       completedSteps: user.completedSteps || [],
       nextStep: nextStep,
       emailVerified: user.emailVerified,
@@ -256,7 +308,7 @@ exports.getStatus = async (req, res) => {
 /**
  * Verify phone number (temporary placeholder for Twilio)
  * POST /onboarding/verify-phone
- * 
+ *
  * In production, this would validate OTP sent to phone
  * For now, it's a simple verification endpoint
  */
@@ -319,7 +371,7 @@ exports.verifyPhone = async (req, res) => {
 /**
  * STEP 0: Add email for wallet users
  * POST /onboarding/add-email
- * 
+ *
  * Wallet users collect email during onboarding Step 0
  * This endpoint:
  * - Validates email doesn't already exist
@@ -355,7 +407,9 @@ exports.addEmail = async (req, res) => {
 
     if (user.onboardingStep !== 0) {
       return res.status(403).json({
-        error: "Email can only be added at Step 0. Current step: " + user.onboardingStep,
+        error:
+          "Email can only be added at Step 0. Current step: " +
+          user.onboardingStep,
       });
     }
 

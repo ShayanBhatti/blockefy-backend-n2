@@ -104,7 +104,7 @@ const register = async (req, res) => {
       username: username.toLowerCase(),
       walletAddress: wallet.address,
       walletPrivateKey: wallet.privateKey,
-      onboardingStep: 1,
+      onboardingStep: 0,
       onboardingCompleted: false,
       role: "buyer",
       authProvider: "email",

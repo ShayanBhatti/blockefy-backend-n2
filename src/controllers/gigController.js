@@ -4,7 +4,7 @@ const Gig = require("../models/Gig");
 exports.createGig = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { title, description, category, tags, pricing, deliveryTime } = req.body;
+    const { title, gigImage, description, category, tags, pricing, deliveryTime } = req.body;
 
     // Validate required fields
     if (!title || !description) {
@@ -44,6 +44,7 @@ exports.createGig = async (req, res) => {
     // Create gig
     const gig = await Gig.create({
       userId,
+      gigImage: gigImage || null,
       title: title.trim(),
       description: description.trim(),
       category: category ? category.trim() : null,
