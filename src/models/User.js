@@ -125,6 +125,29 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    // Cloudinary image metadata - uploaded via separate upload endpoints
+    profileImage: {
+      url: {
+        type: String,
+        default: null,
+      },
+      publicId: {
+        type: String,
+        default: null,
+      },
+      _id: false, // Prevent Mongoose from creating ID for subdocument
+    },
+    coverImage: {
+      url: {
+        type: String,
+        default: null,
+      },
+      publicId: {
+        type: String,
+        default: null,
+      },
+      _id: false, // Prevent Mongoose from creating ID for subdocument
+    },
     // User profile information
     profile: {
       avatar: {
