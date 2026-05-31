@@ -19,20 +19,24 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Check if user exists
         let user = await User.findOne({ googleId: profile.id });
 
         if (user) {
           return done(null, user);
         }
 
-        // Create new user
+        const email = profile.emails?.[0]?.value || null;
+        const baseUsername = email ? email.split("@")[0] : "google_user";
+        const username = `${baseUsername}_${profile.id.slice(-4)}`;
+
         user = new User({
-          email: profile.emails?.[0]?.value,
+          fullname: profile.displayName || "Google User",
+          username: username,
+          email: email,
           googleId: profile.id,
           authProvider: "google",
           role: "buyer",
-          emailVerified: true, // OAuth users are automatically verified
+          emailVerified: true,
         });
 
         await user.save();
@@ -54,25 +58,48 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // Check if user exists
+        // First, check if user exists by githubId
         let user = await User.findOne({ githubId: profile.id });
 
         if (user) {
           return done(null, user);
         }
 
+        // Fetch emails from GitHub API using the access token
+        const emailResponse = await fetch("https://api.github.com/user/emails", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+        });
+
+        const emails = await emailResponse.json();
+        
+        // Find the primary email (or first verified email)
+        const primaryEmailObj = emails.find(
+          (emailObj) => emailObj.primary === true && emailObj.verified === true
+        ) || emails.find((emailObj) => emailObj.verified === true);
+
+        const email = primaryEmailObj?.email || null;
+
+        // Get username from profile (profile.username or profile.login)
+        const username = profile.username || profile.login || `github_${profile.id}`;
+
         // Create new user
         user = new User({
-          email: profile.emails?.[0]?.value,
+          fullname: profile.displayName || "GitHub User",
+          username: username,
+          email: email,
           githubId: profile.id,
           authProvider: "github",
           role: "buyer",
-          emailVerified: true, // OAuth users are automatically verified
+          emailVerified: true, // GitHub verified emails are trusted
         });
 
         await user.save();
         return done(null, user);
       } catch (error) {
+        console.error("GitHub OAuth error:", error);
         return done(error, null);
       }
     }
