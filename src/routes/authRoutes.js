@@ -34,7 +34,7 @@ router.get(
   "/google/callback",
   passport.authenticate("google", { 
     failureRedirect: "/auth/login", 
-    session: false  // ✅ Critical for serverless - disables session serialization
+    session: false
   }),
   async (req, res) => {
     try {
@@ -42,13 +42,15 @@ router.get(
         return res.status(401).json({ msg: "Authentication failed" });
       }
 
-      // Generate JWT token (serverless-safe - no session dependency)
-      const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, {
-        expiresIn: "1d",
-      });
+      // Generate JWT token
+      const token = require("jsonwebtoken").sign(
+        { userId: req.user._id },
+        process.env.JWT_SECRET,
+        { expiresIn: "1d" }
+      );
 
       // Redirect to frontend with token
-      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173/login";
+      const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
       res.redirect(`${frontendUrl}/auth-success?token=${token}`);
     } catch (error) {
       console.error("Google OAuth callback error:", error);
@@ -75,7 +77,7 @@ router.get(
   "/github/callback",
   passport.authenticate("github", { 
     failureRedirect: "/auth/login", 
-    session: false  // ✅ Critical for serverless - disables session serialization
+    session: false
   }),
   async (req, res) => {
     try {
@@ -83,10 +85,12 @@ router.get(
         return res.status(401).json({ msg: "Authentication failed" });
       }
 
-      // Generate JWT token (serverless-safe - no session dependency)
-      const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, {
-        expiresIn: "1d",
-      });
+      // Generate JWT token
+      const token = require("jsonwebtoken").sign(
+        { userId: req.user._id },
+        process.env.JWT_SECRET,
+        { expiresIn: "1d" }
+      );
 
       // Redirect to frontend with token
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";

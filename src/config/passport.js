@@ -2,6 +2,7 @@ const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const GitHubStrategy = require("passport-github2").Strategy;
 const User = require("../models/User");
+const authService = require("../services/authService");
 
 // Dynamic callback URL based on environment
 const getCallbackURL = (provider) => {
@@ -9,7 +10,10 @@ const getCallbackURL = (provider) => {
   return `${baseURL}/auth/${provider}/callback`;
 };
 
-// Google OAuth Strategy
+// ============================================================================
+// GOOGLE OAUTH STRATEGY
+// Implements unified provider linking
+// ============================================================================
 passport.use(
   new GoogleStrategy(
     {
@@ -19,36 +23,50 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        let user = await User.findOne({ googleId: profile.id });
+        const email = profile.emails?.[0]?.value || null;
 
-        if (user) {
-          return done(null, user);
+        // Extract Google profile data
+        const providerData = {
+          provider: "google",
+          email,
+          googleId: profile.id,
+          fullName: profile.displayName || "Google User",
+          username: null, // Google doesn't provide username; will be auto-generated
+        };
+
+        // Use centralized provider linking logic
+        const result = await authService.handleProviderLogin(providerData);
+        const user = result.user;
+
+        // Log the outcome
+        if (result.isNewUser) {
+          authService.logAuthEvent("Google OAuth - new account created", {
+            userId: user._id,
+            email: user.email,
+          });
+        } else if (result.providerLinked) {
+          authService.logAuthEvent("Google OAuth - provider linked", {
+            userId: user._id,
+            email: user.email,
+            isNewLink: !profile.id, // Would indicate existing provider
+          });
         }
 
-        const email = profile.emails?.[0]?.value || null;
-        const baseUsername = email ? email.split("@")[0] : "google_user";
-        const username = `${baseUsername}_${profile.id.slice(-4)}`;
-
-        user = new User({
-          fullname: profile.displayName || "Google User",
-          username: username,
-          email: email,
-          googleId: profile.id,
-          authProvider: "google",
-          role: "buyer",
-          emailVerified: true,
-        });
-
-        await user.save();
         return done(null, user);
       } catch (error) {
+        authService.logAuthEvent("Google OAuth error", {
+          error: error.message,
+        });
         return done(error, null);
       }
     }
   )
 );
 
-// GitHub OAuth Strategy
+// ============================================================================
+// GITHUB OAUTH STRATEGY
+// Implements unified provider linking
+// ============================================================================
 passport.use(
   new GitHubStrategy(
     {
@@ -58,13 +76,6 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        // First, check if user exists by githubId
-        let user = await User.findOne({ githubId: profile.id });
-
-        if (user) {
-          return done(null, user);
-        }
-
         // Fetch emails from GitHub API using the access token
         const emailResponse = await fetch("https://api.github.com/user/emails", {
           headers: {
@@ -74,32 +85,47 @@ passport.use(
         });
 
         const emails = await emailResponse.json();
-        
+
         // Find the primary email (or first verified email)
-        const primaryEmailObj = emails.find(
-          (emailObj) => emailObj.primary === true && emailObj.verified === true
-        ) || emails.find((emailObj) => emailObj.verified === true);
+        const primaryEmailObj =
+          emails.find(
+            (emailObj) =>
+              emailObj.primary === true && emailObj.verified === true
+          ) || emails.find((emailObj) => emailObj.verified === true);
 
         const email = primaryEmailObj?.email || null;
 
-        // Get username from profile (profile.username or profile.login)
-        const username = profile.username || profile.login || `github_${profile.id}`;
-
-        // Create new user
-        user = new User({
-          fullname: profile.displayName || "GitHub User",
-          username: username,
-          email: email,
+        // Extract GitHub profile data
+        const providerData = {
+          provider: "github",
+          email,
           githubId: profile.id,
-          authProvider: "github",
-          role: "buyer",
-          emailVerified: true, // GitHub verified emails are trusted
-        });
+          fullName: profile.displayName || "GitHub User",
+          username: profile.username || profile.login || null,
+        };
 
-        await user.save();
+        // Use centralized provider linking logic
+        const result = await authService.handleProviderLogin(providerData);
+        const user = result.user;
+
+        // Log the outcome
+        if (result.isNewUser) {
+          authService.logAuthEvent("GitHub OAuth - new account created", {
+            userId: user._id,
+            email: user.email,
+          });
+        } else if (result.providerLinked) {
+          authService.logAuthEvent("GitHub OAuth - provider linked", {
+            userId: user._id,
+            email: user.email,
+          });
+        }
+
         return done(null, user);
       } catch (error) {
-        console.error("GitHub OAuth error:", error);
+        authService.logAuthEvent("GitHub OAuth error", {
+          error: error.message,
+        });
         return done(error, null);
       }
     }

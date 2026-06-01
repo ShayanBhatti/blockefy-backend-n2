@@ -29,11 +29,80 @@ const userSchema = new mongoose.Schema(
       enum: ["buyer", "seller"],
       default: "buyer",
     },
+    // ============================================================================
+    // BACKWARD COMPATIBILITY: Keep authProvider for existing code
+    // SOURCE OF TRUTH IS NOW authProviders object below
+    // ============================================================================
     authProvider: {
       type: String,
       enum: ["email", "google", "github", "wallet"],
-      required: true,
+      // No longer required - will be derived from authProviders
     },
+
+    // ============================================================================
+    // NEW: Multi-Provider Support
+    // This object is the authoritative source for provider information
+    // ============================================================================
+    authProviders: {
+      email: {
+        connected: {
+          type: Boolean,
+          default: false,
+        },
+        connectedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+      google: {
+        connected: {
+          type: Boolean,
+          default: false,
+        },
+        googleId: {
+          type: String,
+          default: null,
+        },
+        connectedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+      github: {
+        connected: {
+          type: Boolean,
+          default: false,
+        },
+        githubId: {
+          type: String,
+          default: null,
+        },
+        connectedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+      wallet: {
+        connected: {
+          type: Boolean,
+          default: false,
+        },
+        walletAddress: {
+          type: String,
+          default: null,
+          lowercase: true,
+          trim: true,
+        },
+        connectedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+    },
+
+    // ============================================================================
+    // DEPRECATED FIELDS (kept for backward compatibility, use authProviders instead)
+    // ============================================================================
     googleId: {
       type: String,
       sparse: true,
