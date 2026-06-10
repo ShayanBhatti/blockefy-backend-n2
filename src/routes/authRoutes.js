@@ -18,7 +18,7 @@ router.post("/resend-otp", authController.resendOtp);
 router.get("/verify-email", authController.verifyEmail);
 
 /**
- * Google OAuth
+ * Google OAuth 
  * IMPORTANT: session: false is REQUIRED for serverless/stateless JWT auth
  * Redirects to frontend with JWT token in URL query parameter
  */

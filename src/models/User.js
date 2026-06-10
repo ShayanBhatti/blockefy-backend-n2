@@ -239,11 +239,14 @@ const userSchema = new mongoose.Schema(
         type: String,
         default: null,
       },
-    
     },
 
     // Seller-specific profile
     sellerProfile: {
+      bio: {
+        type: String,
+        default: null,
+      },
       skills: {
         type: [String],
         default: [],
@@ -351,9 +354,20 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    verificationDocument: {
+      type: {
+        type: String,
+        default: null,
+      },
+      image: {
+        url: { type: String, default: null },
+        publicId: { type: String, default: null },
+        _id: false // Prevent Mongoose from creating ID for subdocument
+      }
+    }
   },
   {
-    timestamps: true, // Adds updatedAt field
+    timestamps: true // Adds updatedAt field
   }
 );
 

@@ -1,5 +1,79 @@
 const User = require("../models/User");
 
+/**
+ * Helper: Generate unique username
+ * Tries base, then base + 123, base + 456, etc.
+ */
+const generateUniqueUsername = async (baseUsername) => {
+  if (!baseUsername || typeof baseUsername !== "string") {
+    throw new Error("Base username is required");
+  }
+
+  const normalized = baseUsername.toLowerCase().trim();
+
+  // Check if base username is available
+  let existingUser = await User.findOne({ username: normalized });
+  if (!existingUser) {
+    return normalized; // Base username is available
+  }
+
+  // Try variations: base123, base456, etc.
+  for (let i = 1; i <= 100; i++) {
+    const variation = `${normalized}${Math.floor(Math.random() * 1000)}`;
+    existingUser = await User.findOne({ username: variation });
+    if (!existingUser) {
+      return variation; // Found available variation
+    }
+  }
+
+  throw new Error("Unable to generate unique username after multiple attempts");
+};
+
+/**
+ * Helper: Get missing identity fields based on auth provider
+ * Returns array of fields that need to be collected
+ */
+const getMissingFields = (user) => {
+  const missing = [];
+
+  if (!user) return ["email", "fullName", "username"];
+
+  const provider = user.authProvider;
+
+  // Email auth: requires fullName and username
+  if (provider === "email" || !provider) {
+    if (!user.fullName) missing.push("fullName");
+    if (!user.username) missing.push("username");
+    return missing;
+  }
+
+  // Google auth: provides displayName and picture
+  // Should auto-generate username
+  if (provider === "google") {
+    if (!user.fullName) missing.push("fullName");
+    if (!user.username) missing.push("username");
+    return missing;
+  }
+
+  // GitHub auth: provides name and login
+  // Should use login as username
+  if (provider === "github") {
+    if (!user.fullName) missing.push("fullName");
+    if (!user.username) missing.push("username");
+    return missing;
+  }
+
+  // Wallet auth: requires email, fullName, username
+  if (provider === "wallet") {
+    if (!user.email) missing.push("email");
+    if (!user.fullName) missing.push("fullName");
+    if (!user.username) missing.push("username");
+    return missing;
+  }
+
+  return missing;
+};
+
 exports.updateOnboarding = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -49,9 +123,12 @@ exports.updateOnboarding = async (req, res) => {
         break;
 
       case 2:
-        if (!data || !data.role || !data.username) {
+        // STEP 2: Role selection
+        // ✅ ALL USERS (buyers and sellers) continue through full 6-step process
+        // Role selection only determines profile/gig features, not onboarding completion
+        if (!data || !data.role) {
           return res.status(400).json({
-            error: "Role (buyer/seller) and username are required",
+            error: "Role (buyer/seller) is required",
           });
         }
 
@@ -63,8 +140,14 @@ exports.updateOnboarding = async (req, res) => {
             .json({ error: "Role must be 'buyer' or 'seller'" });
         }
 
-        // Set username
-        user.username = data.username.toLowerCase().trim();
+        // ✅ ENFORCE: Identity must be complete before proceeding
+        if (!user.fullName || !user.username) {
+          return res.status(400).json({
+            error:
+              "Identity information (fullName, username) must be completed first",
+            missingFields: getMissingFields(user),
+          });
+        }
 
         // Mark phone as verified
         user.isPhoneVerified = true;
@@ -72,50 +155,32 @@ exports.updateOnboarding = async (req, res) => {
         // Set role
         user.role = data.role;
 
-        // ✅ If buyer, mark onboarding as complete here (MAX STEP = 2)
-        if (data.role === "buyer") {
-          user.onboardingCompleted = true;
-        }
-        // ✅ If seller, continue to Step 3
+        // ✅ IMPORTANT: Both buyers and sellers continue to Step 3+
+        // Frontend will decide what profile features to show based on role
+        // Do NOT mark as complete - all users go through full 6-step process
         break;
 
       case 3:
-        // STEP 3: Seller profile (fullName, description, skills)
-        // ✅ ENFORCE: Only sellers can proceed beyond step 2
-        if (user.role !== "seller") {
-          return res.status(403).json({
-            error:
-              "Only sellers can proceed to Step 3. Buyers complete at Step 2.",
-          });
-        }
-
-        if (
-          !data ||
-          !data.fullName ||
-          !data.description
-          // !Array.isArray(data.skills)
-        ) {
+        // STEP 3: Profile description
+        // ✅ ALL USERS provide description (buyers and sellers)
+        // Both roles collect this data for comprehensive profile information
+        if (!data || !data.sellerIntro.bio) {
           return res.status(400).json({
-            error: "fullName, description, and skills are required",
+            error: "seller Bio  is required",
           });
         }
 
-        user.fullName = data.fullName.trim();
-        user.description = data.description.trim();
-        // user.skills = data.skills;
+        user.sellerProfile.bio = data?.sellerIntro.bio.trim();
         break;
 
       case 4:
-        // STEP 4: Complete Seller Profile
-        // ✅ ENFORCE: Sellers only
-        if (user.role !== "seller") {
-          return res.status(403).json({
-            error: "Only sellers can proceed to Step 4",
-          });
-        }
+        // STEP 4: Profile Foundation (Universal - all users)
+        // Collect headline, tagline, about, avatar, coverPhoto
+        // ✅ ALL USERS provide profile information (buyers and sellers)
+        // Frontend decides how to use this data based on role
         const {
           headline,
-          about,
+          bio,
           tagline,
           avatar, // base64 string or URL
           coverPhoto, // base64 string or URL
@@ -124,7 +189,7 @@ exports.updateOnboarding = async (req, res) => {
 
         // ---------- Required Fields Validation ----------
         // Priority: incoming payload > existing DB value > null
-      
+
         const finalHeadline =
           headline !== undefined ? headline : user.profile?.headline;
         if (!finalHeadline || finalHeadline.trim() === "") {
@@ -134,11 +199,11 @@ exports.updateOnboarding = async (req, res) => {
           });
         }
 
-        const finalAbout = about !== undefined ? about : user.profile?.about;
+        const finalAbout = bio !== undefined ? bio : user.profile?.about;
         if (!finalAbout || finalAbout.trim() === "") {
           return res.status(400).json({
             error: "Profile about/bio is required to complete Step 4",
-            missingFields: ["about"],
+            missingFields: ["bio"],
           });
         }
 
@@ -172,7 +237,7 @@ exports.updateOnboarding = async (req, res) => {
         // ---------- Prepare Updates ----------
         const profileUpdate = {};
         if (headline !== undefined) profileUpdate.headline = finalHeadline;
-        if (about !== undefined) profileUpdate.about = finalAbout;
+        if (bio !== undefined) profileUpdate.about = finalAbout;
         if (tagline !== undefined) profileUpdate.tagline = tagline;
         if (avatar !== undefined) profileUpdate.avatar = avatar; // save base64 or URL
         if (coverPhoto !== undefined) profileUpdate.coverPhoto = coverPhoto;
@@ -180,6 +245,14 @@ exports.updateOnboarding = async (req, res) => {
         const sellerProfileUpdate = {};
         if (incomingSkills !== undefined)
           sellerProfileUpdate.skills = finalSkills;
+        user.profileImage = {
+          url: avatar || user.profileImage?.url || null,
+          publicId: user.profileImage?.publicId || null,
+        };
+        user.coverImage = {
+          url: coverPhoto || user.coverImage?.url || null,
+          publicId: user.coverImage?.publicId || null,
+        };
         // ---------- Apply Updates ----------
         user.profile = {
           ...user.profile,
@@ -191,29 +264,31 @@ exports.updateOnboarding = async (req, res) => {
         };
         break;
       case 5:
-        // STEP 5: Additional verification / Gig deployment
-        // ✅ ENFORCE: Sellers only
-        if (user.role !== "seller") {
-          return res.status(403).json({
-            error: "Only sellers can proceed to Step 5",
-          });
+        if (!data || !data.documentType) {
+          return res.status(400).json({ error: "documentType required" });
         }
-        // TODO: Validation for step 5
-        break;
+        if (!data.image || !data.image.url) {
+          return res.status(400).json({ error: "image.url required" });
+        }
 
-      case 6:
-        // STEP 6: ID verification - final seller step
-        // ✅ ENFORCE: Sellers only
-        if (user.role !== "seller") {
-          return res.status(403).json({
-            error: "Only sellers can proceed to Step 6",
-          });
+        // Ensure verificationDocument exists as an object
+        if (
+          !user.verificationDocument ||
+          typeof user.verificationDocument === "string"
+        ) {
+          user.verificationDocument = { image: {} };
         }
+        if (!user.verificationDocument.image) {
+          user.verificationDocument.image = {};
+        }
+
+        user.verificationDocument.type = data.documentType;
+        user.verificationDocument.image.url = data.image.url;
+        user.verificationDocument.image.publicId = data.image.publicId || null;
 
         user.isIdVerified = true;
         user.onboardingCompleted = true;
         break;
-
       default:
         return res.status(400).json({ error: "Invalid step" });
     }
@@ -230,26 +305,18 @@ exports.updateOnboarding = async (req, res) => {
     // Save user
     await user.save();
 
-    // ✅ Calculate next step based on role
+    // ✅ Calculate next step - ALL users follow same path: 1 -> 2 -> 3 -> 4 -> 5 -> 6
     let nextStep = null;
-    if (user.role === "buyer" && step === 2) {
-      // Buyers end at step 2
-      nextStep = null;
-    } else if (user.role === "seller") {
-      // Sellers: 1 -> 2 -> 3 -> 4 -> 5 -> 6
-      if (step < 6) {
-        nextStep = step + 1;
-      } else {
-        nextStep = null; // All steps complete
-      }
-    } else {
-      // Default progression
+    if (step < 6) {
       nextStep = step + 1;
+    } else {
+      nextStep = null; // All steps complete
     }
 
     res.json({
       msg: "Step completed successfully and verified",
       completedStep: step,
+      user: user,
       completedSteps: user.completedSteps,
       nextStep: nextStep,
       onboardingCompleted: user.onboardingCompleted,
@@ -272,20 +339,12 @@ exports.getStatus = async (req, res) => {
       return res.status(403).json({ error: "User not found" });
     }
 
-    // ✅ Calculate next step based on role
+    // ✅ Calculate next step - ALL users follow same path: 1 -> 2 -> 3 -> 4 -> 5 -> 6
     let nextStep = null;
-    if (user.role === "buyer" && user.onboardingStep === 2) {
-      nextStep = null; // Buyers end at step 2
-    } else if (user.role === "seller") {
-      if (user.onboardingStep < 6) {
-        nextStep = user.onboardingStep + 1;
-      } else {
-        nextStep = null;
-      }
+    if (user.onboardingStep < 6) {
+      nextStep = user.onboardingStep + 1;
     } else {
-      if (user.onboardingStep < 6) {
-        nextStep = user.onboardingStep + 1;
-      }
+      nextStep = null; // All steps complete
     }
 
     res.json({
@@ -295,10 +354,13 @@ exports.getStatus = async (req, res) => {
       provider: user.authProvider,
       completedSteps: user.completedSteps || [],
       nextStep: nextStep,
-      email:user.email || null,
+      email: user.email || null,
       emailVerified: user.emailVerified,
       phoneVerified: user.isPhoneVerified,
       role: user.role,
+      fullName: user.fullName || null,
+      username: user.username || null,
+      missingFields: getMissingFields(user),
     });
   } catch (error) {
     console.error("Get onboarding status error:", error);
@@ -370,16 +432,161 @@ exports.verifyPhone = async (req, res) => {
 };
 
 /**
- * STEP 0: Add email for wallet users
- * POST /onboarding/add-email
+ * STEP 0: Setup Identity for Wallet Users
+ * POST /onboarding/setup-identity
  *
- * Wallet users collect email during onboarding Step 0
+ * Wallet users collect email, fullName, and username during Step 0
  * This endpoint:
- * - Validates email doesn't already exist
- * - Saves email to user
- * - Generates verification token
+ * - Validates all three identity fields
+ * - Ensures email uniqueness
+ * - Generates unique username
+ * - Generates OTP for email verification
  * - Sends verification email
- * - DO NOT advance to next step (user must verify email)
+ * - DO NOT advance onboardingStep (user must verify email first)
+ */
+exports.setupIdentity = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { email, fullName, username } = req.body;
+
+    // Validation
+    if (!email || !fullName || !username) {
+      return res.status(400).json({
+        error: "email, fullName, and username are all required",
+        missingFields: [],
+      });
+    }
+
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(403).json({ error: "User not found" });
+    }
+
+    // ✅ ENFORCE: Only wallet users at Step 0 can setup identity
+    if (user.authProvider !== "wallet") {
+      return res.status(403).json({
+        error: "Only wallet users can use this endpoint",
+      });
+    }
+
+    if (user.onboardingStep !== 0) {
+      return res.status(403).json({
+        error:
+          "Identity can only be set at Step 0. Current step: " +
+          user.onboardingStep,
+      });
+    }
+
+    // ✅ Normalize inputs
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedFullName = fullName.trim();
+    const normalizedUsername = username.toLowerCase().trim();
+
+    // ✅ Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      return res.status(400).json({
+        error: "Invalid email format",
+      });
+    }
+
+    // ✅ Validate fullName (minimum 3 characters)
+    if (normalizedFullName.length < 3) {
+      return res.status(400).json({
+        error: "Full name must be at least 3 characters",
+      });
+    }
+
+    // ✅ Validate username (minimum 3 characters)
+    if (normalizedUsername.length < 3) {
+      return res.status(400).json({
+        error: "Username must be at least 3 characters",
+      });
+    }
+
+    // ✅ Prevent duplicate emails
+    const existingUserByEmail = await User.findOne({
+      email: normalizedEmail,
+    });
+    if (existingUserByEmail) {
+      return res.status(409).json({
+        error: "This email is already registered",
+      });
+    }
+
+    // ✅ Check if username is available, or generate unique variation
+    let finalUsername = normalizedUsername;
+    const existingUserByUsername = await User.findOne({
+      username: normalizedUsername,
+    });
+    if (existingUserByUsername) {
+      // Generate unique variation
+      finalUsername = await generateUniqueUsername(normalizedUsername);
+    }
+
+    // ✅ Generate OTP for email verification
+    const { generateOtp } = require("../utils/generateOtp");
+    const { otp, expiresAt } = generateOtp();
+
+    // Save identity and OTP to user
+    user.email = normalizedEmail;
+    user.fullName = normalizedFullName;
+    user.username = finalUsername;
+    user.emailOtp = otp;
+    user.emailOtpExpires = expiresAt;
+    user.emailOtpAttempts = 0;
+    user.emailVerified = false;
+    user.lastOtpSentAt = new Date();
+
+    await user.save();
+
+    // Send OTP email
+    try {
+      const { sendOtpEmail } = require("../utils/email");
+      await sendOtpEmail(user, otp);
+
+      // ✅ Record attempt for rate limiting
+      const ONE_HOUR = 60 * 60 * 1000;
+      const recentAttempts = (user.otpSendAttempts || []).filter(
+        (attempt) => Date.now() - new Date(attempt).getTime() < ONE_HOUR,
+      );
+      recentAttempts.push(new Date());
+      user.otpSendAttempts = recentAttempts;
+      await user.save();
+
+      res.status(200).json({
+        msg: "Identity setup successful. OTP sent to your email.",
+        email: normalizedEmail,
+        fullName: normalizedFullName,
+        username: finalUsername,
+        step: 0,
+        nextAction: "Verify email with OTP to proceed to Step 1",
+      });
+    } catch (emailError) {
+      console.error("Failed to send OTP email:", emailError.message);
+      // Remove identity and OTP if email sending fails
+      user.email = null;
+      user.fullName = null;
+      user.username = null;
+      user.emailOtp = null;
+      user.emailOtpExpires = null;
+      await user.save();
+
+      res.status(500).json({
+        error: "Failed to send OTP email. Please try again.",
+      });
+    }
+  } catch (error) {
+    console.error("Setup identity error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * LEGACY: Add email for wallet users (deprecated)
+ * Use setupIdentity instead
+ * Kept for backward compatibility
  */
 exports.addEmail = async (req, res) => {
   try {

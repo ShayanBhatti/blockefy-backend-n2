@@ -5,7 +5,15 @@ const { checkEmailVerified } = require("../middleware/onboardingMiddleware");
 
 const router = express.Router();
 
-// 🆕 STEP 0: Add email for wallet users (protected route)
+// 🆕 STEP 0: Setup identity for wallet users (protected route)
+// Collects email, fullName, and username for wallet users
+router.post(
+  "/setup-identity",
+  authMiddleware.verifyToken,
+  onboardingController.setupIdentity
+);
+
+// LEGACY: Add email for wallet users (deprecated, kept for backward compatibility)
 router.post(
   "/add-email",
   authMiddleware.verifyToken,

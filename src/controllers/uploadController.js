@@ -25,7 +25,7 @@ const uploadProfileImage = async (req, res) => {
     // Upload to Cloudinary
     const imageData = await uploadService.uploadImage(
       req.file,
-      "blockefy/profile-images"
+      "blockefy/profile-images",
     );
 
     // Return success response
@@ -82,7 +82,7 @@ const uploadCoverImage = async (req, res) => {
     // Upload to Cloudinary
     const imageData = await uploadService.uploadImage(
       req.file,
-      "blockefy/cover-images"
+      "blockefy/cover-images",
     );
 
     // Return success response
@@ -138,7 +138,7 @@ const uploadGigImage = async (req, res) => {
     // Upload to Cloudinary
     const imageData = await uploadService.uploadImage(
       req.file,
-      "blockefy/gig-images"
+      "blockefy/gig-images",
     );
 
     // Return success response
@@ -159,6 +159,57 @@ const uploadGigImage = async (req, res) => {
 
     let statusCode = 500;
     let errorMessage = "Gig image upload failed";
+
+    if (error.message.includes("Invalid file type")) {
+      statusCode = 415;
+      errorMessage = error.message;
+    } else if (error.message.includes("File size")) {
+      statusCode = 413;
+      errorMessage = error.message;
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      message: errorMessage,
+      error: "UPLOAD_FAILED",
+    });
+  }
+};
+const uploadVerificationDocument = async (req, res) => {
+  try {
+    // Validate file exists
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No file provided. Please upload an image.",
+        error: "NO_FILE",
+      });
+    }
+
+    // Upload to Cloudinary
+    const imageData = await uploadService.uploadImage(
+      req.file,
+      "blockefy/verification-documents",
+    );
+
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: "Verification document uploaded successfully",
+      data: {
+        url: imageData.url,
+        publicId: imageData.publicId,
+        width: imageData.width,
+        height: imageData.height,
+        format: imageData.format,
+        size: imageData.size,
+      },
+    });
+  } catch (error) {
+    console.error("Upload verification document error:", error);
+
+    let statusCode = 500;
+    let errorMessage = "Verification document upload failed";
 
     if (error.message.includes("Invalid file type")) {
       statusCode = 415;
@@ -207,8 +258,8 @@ const deleteUploadedImage = async (req, res) => {
 
     // Verify ownership - image must belong to this user
     const belongsToUser =
-      (user.profileImage?.publicId === publicId) ||
-      (user.coverImage?.publicId === publicId);
+      user.profileImage?.publicId === publicId ||
+      user.coverImage?.publicId === publicId;
 
     if (!belongsToUser) {
       return res.status(403).json({
@@ -260,6 +311,7 @@ const deleteUploadedImage = async (req, res) => {
 module.exports = {
   uploadProfileImage,
   uploadCoverImage,
+  uploadVerificationDocument,
   uploadGigImage,
   deleteUploadedImage,
 };

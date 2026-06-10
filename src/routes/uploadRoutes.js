@@ -1,7 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const uploadController = require("../controllers/uploadController");
-const { uploadImage, handleUploadError } = require("../middleware/uploadMiddleware");
+const {
+  uploadImage,
+  handleUploadError,
+} = require("../middleware/uploadMiddleware");
 const { verifyToken } = require("../middleware/authMiddleware");
 
 /**
@@ -18,9 +21,9 @@ const { verifyToken } = require("../middleware/authMiddleware");
 router.post(
   "/profile-image",
   verifyToken,
-  uploadImage.single("image"),
+  uploadImage.single("profileImage"),
   handleUploadError,
-  uploadController.uploadProfileImage
+  uploadController.uploadProfileImage,
 );
 
 /**
@@ -31,9 +34,9 @@ router.post(
 router.post(
   "/cover-image",
   verifyToken,
-  uploadImage.single("image"),
+  uploadImage.single("coverImage"),
   handleUploadError,
-  uploadController.uploadCoverImage
+  uploadController.uploadCoverImage,
 );
 
 /**
@@ -44,9 +47,22 @@ router.post(
 router.post(
   "/gig-image",
   verifyToken,
-  uploadImage.single("image"),
+  uploadImage.single("gigImage"),
   handleUploadError,
-  uploadController.uploadGigImage
+  uploadController.uploadGigImage,
+);
+
+/**
+ * POST /api/upload/verification-document
+ * Upload verification document
+ * Returns: { success, data: { url, publicId, ... } }
+ */
+router.post(
+  "/verification-document",
+  verifyToken,
+  uploadImage.single("verificationDocument"),
+  handleUploadError,
+  uploadController.uploadVerificationDocument,
 );
 
 /**

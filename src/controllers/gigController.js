@@ -25,21 +25,16 @@ exports.createGig = async (req, res) => {
       });
     }
 
-    // ✅ ENFORCE: Seller must have completed profile (at least Step 4)
-    // Step 3 = Profile complete, Step 4+ = Ready to create gigs
+    // ✅ ENFORCE: Seller must have completed profile foundation (at least Step 4)
+    // Step 4 = Profile Foundation (headline, about, skills, avatar)
+    // Sellers can create gigs once profile is complete
     if (user.onboardingStep < 4) {
       return res.status(403).json({
-        error: "Complete your seller profile before creating gigs",
+        error: "Complete your seller profile (Step 4) before creating gigs",
         currentStep: user.onboardingStep,
         requiredStep: 4,
       });
     }
-
-    // If user is on step 4 of onboarding, advance to step 5
-    // if (user.onboardingStep === 4) {
-    //   user.onboardingStep = 5;
-    //   await user.save();
-    // }
 
     // Create gig
     const gig = await Gig.create({
