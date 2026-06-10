@@ -100,10 +100,13 @@ exports.updateOnboarding = async (req, res) => {
         emailVerified: false,
       });
     }
-    console.log("User onboarding step:", user);
-    // Validate step progression - step must equal user.onboardingStep + 1
-    if (step !== user.onboardingStep + 1) {
-      return res.status(400).json({ error: "Invalid step progression" });
+    // Allow buyers to skip step 3
+    const isBuyerSkippingStep3 = user.role === "buyer" && user.onboardingStep === 2 && step === 4;
+
+    if (step !== user.onboardingStep + 1 && !isBuyerSkippingStep3) {
+      return res.status(400).json({
+        error: "Invalid step progression",
+      });
     }
 
     // Process based on step
