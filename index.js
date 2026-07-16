@@ -8,6 +8,7 @@ const gigRoutes = require("./src/routes/gigRoutes");
 const onboardingRoutes = require("./src/routes/onboardingRoutes");
 const profileRoutes = require("./src/routes/profileRoutes");
 const uploadRoutes = require("./src/routes/uploadRoutes");
+const dashboardRoutes = require("./src/routes/dashboardRoutes");
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use("/gigs", gigRoutes);
 app.use("/onboarding", onboardingRoutes);
 app.use("/profile", profileRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/dashboard", dashboardRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
