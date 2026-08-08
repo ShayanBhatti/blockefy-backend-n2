@@ -1,265 +1,128 @@
 // seedGigs.js
-require("dotenv").config();
-const mongoose = require("mongoose");
+require('dotenv').config(); // Load .env
+const mongoose = require('mongoose');
+const { faker } = require('@faker-js/faker');
 
-// --- CONFIGURATION ---
-const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://localhost:27017/your-db-name"; // replace with your MongoDB URI
-const TARGET_USER_ID = ""; // from your user table
-const NUMBER_OF_GIGS = 20;
+const User = require('../models/User');      // adjust path
+const Gig = require('../models/Gig');        // adjust path
 
-// --- Placeholder Image (1x1 transparent PNG) ---
-// Replace this with your own base64 images (up to 3 per gig)
-const DEFAULT_IMAGE_URL =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-
-function getDefaultImages(isPrimary = true) {
-  return [
-    {
-      data: DEFAULT_IMAGE_URL,
-      contentType: "image/png",
-      isPrimary,
-    },
-  ];
+// ================ CONFIGURATION ================
+// Read URI from environment
+const MONGO_URI = process.env.MONGODB_URI;
+if (!MONGO_URI) {
+  console.error('❌ MONGODB_URI not set in .env');
+  process.exit(1);
 }
 
-// --- Helper: Realistic gig data generators ---
-const CATEGORIES = [
-  "Web Development",
-  "Mobile Apps",
-  "Graphic Design",
-  "Digital Marketing",
-  "Writing & Translation",
-  "Video & Animation",
-  "Music & Audio",
-  "Programming & Tech",
-  "Business",
-  "Lifestyle",
-  "Data Science",
-  "AI & ML",
+// TODO: Provide at least one valid userId (must be a seller)
+// If you leave it empty, the script will fetch all sellers from the DB.
+const PROVIDED_USER_IDS = [
+  '6a76f4b7de344e64cda77c15', // replace with real IDs
 ];
 
-const TITLES = {
-  "Web Development": [
-    "Custom WordPress Website",
-    "React.js E‑commerce Store",
-    "Landing Page with Tailwind",
-    "Full‑Stack MERN Application",
-    "Portfolio Website with Animations",
-    "Shopify Store Setup",
-  ],
-  "Mobile Apps": [
-    "Flutter iOS/Android App",
-    "React Native UI/UX Design",
-    "App Store Optimization",
-    "Cross‑Platform Mobile Game",
-    "Fitness Tracking App",
-    "Food Delivery App MVP",
-  ],
-  "Graphic Design": [
-    "Minimalist Logo Design",
-    "Social Media Carousel Pack",
-    "Brand Identity Kit",
-    "Product Packaging Mockup",
-    "Infographic for Business",
-    "YouTube Thumbnail Design",
-  ],
-  "Digital Marketing": [
-    "SEO Audit & Fix",
-    "Google Ads Campaign Setup",
-    "Social Media Management (1 month)",
-    "Email Marketing Automation",
-    "Content Marketing Strategy",
-    "Facebook Pixel Setup",
-  ],
-  "Writing & Translation": [
-    "Blog Post (1000 words)",
-    "Technical Documentation",
-    "Proofreading & Editing",
-    "Spanish to English Translation",
-    "Copywriting for Sales Page",
-    "Resume & Cover Letter",
-  ],
-  "Video & Animation": [
-    "Explainer Video (60 sec)",
-    "YouTube Intro Animation",
-    "TikTok Video Editing",
-    "Whiteboard Animation",
-    "Product Promo Reel",
-    "After Effects Motion Graphics",
-  ],
-};
+// TODO: Provide an array of image URLs (gigImage)
+const IMAGE_URLS = [
+  
+  'https://picsum.photos/id/1/800/600',
+  'https://picsum.photos/id/10/800/600',
+  'https://picsum.photos/id/100/800/600',
+  'https://picsum.photos/id/1015/800/600',
+  'https://picsum.photos/id/1018/800/600',
+  'https://picsum.photos/id/102/800/600',
+  'https://picsum.photos/id/1024/800/600',
+  'https://picsum.photos/id/106/800/600',
+  'https://picsum.photos/id/1067/800/600',
+  'https://picsum.photos/id/1074/800/600',
+];
 
-const TAGS_MAP = {
-  "Web Development": [
-    "responsive",
-    "javascript",
-    "html5",
-    "css3",
-    "react",
-    "nodejs",
-  ],
-  "Mobile Apps": [
-    "flutter",
-    "swift",
-    "kotlin",
-    "firebase",
-    "ui/ux",
-    "appstore",
-  ],
-  "Graphic Design": [
-    "adobe illustrator",
-    "photoshop",
-    "minimalist",
-    "branding",
-    "vector",
-  ],
-  "Digital Marketing": [
-    "seo",
-    "google ads",
-    "facebook ads",
-    "analytics",
-    "email",
-  ],
-  "Writing & Translation": [
-    "blog",
-    "technical writing",
-    "grammar",
-    "localization",
-  ],
-  "Video & Animation": [
-    "premiere pro",
-    "after effects",
-    "voiceover",
-    "2d animation",
-  ],
-};
+const NUM_GIGS = 25;
 
+// ================ HELPER FUNCTIONS ================
 function randomItem(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function getRandomTags(category) {
-  const tagPool = TAGS_MAP[category] || [
-    "quality",
-    "fast delivery",
-    "professional",
-  ];
-  const shuffled = [...tagPool];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled.slice(0, Math.min(3, shuffled.length));
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function generateGigs(userId, count) {
-  const gigs = [];
-  for (let i = 1; i <= count; i++) {
-    const category = randomItem(CATEGORIES);
-    const titlePool = TITLES[category] || [
-      `Professional ${category} Service ${i}`,
-    ];
-    const title =
-      randomItem(titlePool) + (i % 3 === 0 ? ` (Package ${i})` : "");
-    const description =
-      `I will deliver high‑quality ${category.toLowerCase()} tailored to your needs. ` +
-      `Includes unlimited revisions, source files, and dedicated support. ${category} experts with 5+ years experience.`;
+function generateRandomGig(userId, imageUrl) {
+  const pricing = {
+    base: faker.commerce.price({ min: 10, max: 50, dec: 0 }),
+    standard: faker.commerce.price({ min: 60, max: 150, dec: 0 }),
+    premium: faker.commerce.price({ min: 200, max: 500, dec: 0 }),
+  };
 
-    const basicPrice = 30 + Math.floor(Math.random() * 120);
-    const standardPrice = basicPrice + 50 + Math.floor(Math.random() * 150);
-    const premiumPrice = standardPrice + 80 + Math.floor(Math.random() * 200);
+  const status = Math.random() < 0.8 ? 'posted' : 'draft';
 
-    const deliveryTime = Math.floor(Math.random() * 10) + 1; // 1-10 days
-
-    gigs.push({
-      userId,
-      title,
-      description,
-      category,
-      tags: getRandomTags(category),
-      pricing: {
-        basic: basicPrice,
-        standard: standardPrice,
-        premium: premiumPrice,
-      },
-      deliveryTime,
-      images: getDefaultImages(true), // exactly one primary image
-    });
-  }
-  return gigs;
-}
-
-// --- Mongoose Model Definition (if not already defined elsewhere) ---
-let Gig;
-try {
-  Gig = mongoose.model("Gig");
-} catch (e) {
-  const gigSchema = new mongoose.Schema(
-    {
-      userId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        required: true,
-      },
-      title: { type: String, required: true, trim: true },
-      description: { type: String, required: true, trim: true },
-      category: { type: String, trim: true },
-      tags: { type: [String], default: [] },
-      pricing: {
-        basic: { type: Number, min: 0 },
-        standard: { type: Number, min: 0 },
-        premium: { type: Number, min: 0 },
-      },
-      deliveryTime: { type: Number },
-      images: {
-        type: [
-          {
-            data: { type: String, required: true },
-            contentType: { type: String, required: true },
-            isPrimary: { type: Boolean, default: false },
-          },
-        ],
-        validate: [(val) => val.length <= 3, "Max 3 images allowed"],
-        default: [],
-      },
-    },
-    { timestamps: true },
+  const tags = faker.helpers.arrayElements(
+    ['web', 'design', 'coding', 'writing', 'marketing', 'video', 'photo', 'music', 'voice', 'consulting'],
+    { min: 2, max: 4 }
   );
-  Gig = mongoose.model("Gig", gigSchema);
+
+  return {
+    userId,
+    gigImage: imageUrl || null,
+    gigImagePublicId: null,
+    title: faker.company.catchPhrase(),
+    description: faker.lorem.paragraphs({ min: 2, max: 4 }),
+    category: faker.helpers.arrayElement([
+      'web-development',
+      'graphic-design',
+      'writing-translation',
+      'digital-marketing',
+      'video-animation',
+      'music-audio',
+      'programming-tech',
+      'business-consulting',
+    ]),
+    tags,
+    pricing,
+    deliveryTime: randomInt(1, 7),
+    status,
+    createdAt: faker.date.past({ years: 1 }),
+    updatedAt: new Date(),
+  };
 }
 
-// --- Main seeding function ---
+// ================ MAIN SEEDER ================
 async function seedGigs() {
   try {
     await mongoose.connect(MONGO_URI);
-    console.log("✅ Connected to MongoDB");
+    console.log('Connected to MongoDB');
 
-    // Generate 25 gigs
-    const gigsData = generateGigs(TARGET_USER_ID, NUMBER_OF_GIGS);
+    let userIds = PROVIDED_USER_IDS.filter(id => id && id.length > 0);
 
-    // Insert into DB
-    const result = await Gig.insertMany(gigsData);
-    console.log(
-      `✅ Successfully inserted ${result.length} gigs for user ${TARGET_USER_ID}`,
-    );
+    if (userIds.length === 0) {
+      console.log('No user IDs provided. Fetching all sellers from DB...');
+      const sellers = await User.find({ role: 'seller' }).select('_id');
+      userIds = sellers.map(u => u._id.toString());
+      if (userIds.length === 0) {
+        throw new Error('No sellers found. Create a seller user first.');
+      }
+      console.log(`Found ${userIds.length} seller(s).`);
+    }
 
-    // Optional: also export a JSON file for inspection
-    const fs = require("fs");
-    const jsonOutput = gigsData.map((g) => ({
-      ...g,
-      userId: g.userId.toString(),
-      images: g.images.map((img) => ({
-        ...img,
-        data: "[BASE64_IMAGE_PLACEHOLDER]",
-      })),
-    }));
-    fs.writeFileSync("gigs-seed.json", JSON.stringify(jsonOutput, null, 2));
-    console.log("📄 JSON preview saved to gigs-seed.json (images hidden)");
-  } catch (err) {
-    console.error("❌ Seeding failed:", err);
-  } finally {
+    const imagePool = IMAGE_URLS.length > 0 ? IMAGE_URLS : ['https://picsum.photos/seed/default/800/600'];
+
+    const gigs = [];
+    for (let i = 0; i < NUM_GIGS; i++) {
+      const userId = randomItem(userIds);
+      const imageUrl = randomItem(imagePool);
+      gigs.push(generateRandomGig(userId, imageUrl));
+    }
+
+    const inserted = await Gig.insertMany(gigs);
+    console.log(`✅ Successfully created ${inserted.length} gigs:`);
+    inserted.forEach((g, idx) => {
+      console.log(`  ${idx+1}. ${g.title} (${g.status}) - user: ${g.userId}`);
+    });
+
     await mongoose.disconnect();
+    console.log('Disconnected from MongoDB');
+  } catch (error) {
+    console.error('❌ Seeding failed:', error);
+    process.exit(1);
   }
 }
 
