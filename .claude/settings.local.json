@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//d D:/Fyp_project/**)",
+      "Bash(node -c src/controllers/gigController.js)",
+      "Bash(node -c src/routes/gigRoutes.js)",
+      "Bash(node -c src/models/Gig.js)",
+      "Read(//d/blockefy/**)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

@@ -85,18 +85,10 @@ const uploadCoverImage = async (req, res) => {
       "blockefy/cover-images",
     );
 
-    // Return success response
+    // Return success response - simplified
     return res.status(200).json({
-      success: true,
-      message: "Cover image uploaded successfully",
-      data: {
-        url: imageData.url,
-        publicId: imageData.publicId,
-        width: imageData.width,
-        height: imageData.height,
-        format: imageData.format,
-        size: imageData.size,
-      },
+      url: imageData.url,
+      publicId: imageData.publicId,
     });
   } catch (error) {
     console.error("Upload cover image error:", error);
@@ -113,9 +105,7 @@ const uploadCoverImage = async (req, res) => {
     }
 
     return res.status(statusCode).json({
-      success: false,
-      message: errorMessage,
-      error: "UPLOAD_FAILED",
+      error: errorMessage,
     });
   }
 };
@@ -129,9 +119,7 @@ const uploadGigImage = async (req, res) => {
     // Validate file exists
     if (!req.file) {
       return res.status(400).json({
-        success: false,
-        message: "No file provided. Please upload an image.",
-        error: "NO_FILE",
+        error: "No file provided. Please upload an image.",
       });
     }
 
@@ -141,18 +129,10 @@ const uploadGigImage = async (req, res) => {
       "blockefy/gig-images",
     );
 
-    // Return success response
+    // Return success response - simplified
     return res.status(200).json({
-      success: true,
-      message: "Gig image uploaded successfully",
-      data: {
-        url: imageData.url,
-        publicId: imageData.publicId,
-        width: imageData.width,
-        height: imageData.height,
-        format: imageData.format,
-        size: imageData.size,
-      },
+      url: imageData.url,
+      publicId: imageData.publicId,
     });
   } catch (error) {
     console.error("Upload gig image error:", error);
@@ -169,9 +149,7 @@ const uploadGigImage = async (req, res) => {
     }
 
     return res.status(statusCode).json({
-      success: false,
-      message: errorMessage,
-      error: "UPLOAD_FAILED",
+      error: errorMessage,
     });
   }
 };

@@ -9,13 +9,16 @@ const gigSchema = new mongoose.Schema(
     },
     title: {
       type: String,
-      required: true,
       trim: true,
     },
     description: {
       type: String,
-      required: true,
       trim: true,
+    },
+    status: {
+      type: String,
+      enum: ["draft", "posted"],
+      default: "draft",
     },
     category: {
       type: String,
@@ -43,25 +46,14 @@ const gigSchema = new mongoose.Schema(
       type: Number,
       // in days
     },
-    images: {
-      type: [
-        {
-          data: {
-            type: String,
-            required: true,
-          },
-          contentType: {
-            type: String,
-            required: true,
-          },
-          isPrimary: {
-            type: Boolean,
-            default: false,
-          },
-        },
-      ],
-      validate: [(val) => val.length <= 3, "Max 3 images allowed"],
-      default: [],
+    // Image storage - stores Cloudinary URL and publicId
+    gigImage: {
+      type: String,  // Cloudinary URL
+      default: null,
+    },
+    gigImagePublicId: {
+      type: String,  // Cloudinary publicId for deletion
+      default: null,
     },
   },
   {

@@ -10,26 +10,14 @@ const { verifyToken } = require("../middleware/authMiddleware");
 /**
  * Upload Routes
  * All routes require authentication via JWT
- * Uses memory storage for serverless environments
+ * Only two endpoints: /cover-image and /gig-image
+ * Returns: { url, publicId }
  */
-
-/**
- * POST /api/upload/profile-image
- * Upload user profile image
- * Returns: { success, data: { url, publicId, ... } }
- */
-router.post(
-  "/profile-image",
-  verifyToken,
-  uploadImage.single("profileImage"),
-  handleUploadError,
-  uploadController.uploadProfileImage,
-);
 
 /**
  * POST /api/upload/cover-image
- * Upload user cover image
- * Returns: { success, data: { url, publicId, ... } }
+ * Upload cover image
+ * Returns: { url, publicId }
  */
 router.post(
   "/cover-image",
@@ -41,8 +29,8 @@ router.post(
 
 /**
  * POST /api/upload/gig-image
- * Upload gig/service image
- * Returns: { success, data: { url, publicId, ... } }
+ * Upload gig image
+ * Returns: { url, publicId }
  */
 router.post(
   "/gig-image",
@@ -51,26 +39,5 @@ router.post(
   handleUploadError,
   uploadController.uploadGigImage,
 );
-
-/**
- * POST /api/upload/verification-document
- * Upload verification document
- * Returns: { success, data: { url, publicId, ... } }
- */
-router.post(
-  "/verification-document",
-  verifyToken,
-  uploadImage.single("verificationDocument"),
-  handleUploadError,
-  uploadController.uploadVerificationDocument,
-);
-
-/**
- * DELETE /api/upload/:publicId
- * Delete image by public ID
- * Only allows deletion if image belongs to authenticated user
- * Returns: { success, data: { publicId, removed } }
- */
-router.delete("/:publicId", verifyToken, uploadController.deleteUploadedImage);
 
 module.exports = router;

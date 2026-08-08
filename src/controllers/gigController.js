@@ -1,15 +1,73 @@
 const User = require("../models/User");
 const Gig = require("../models/Gig");
 
+// ============================================
+// HELPER: Validate gig for posting
+// ============================================
+const validateGigForPosting = (gigData) => {
+  const errors = [];
+
+  if (!gigData.title || gigData.title.trim().length === 0) {
+    errors.push("Title is required");
+  }
+  if (!gigData.description || gigData.description.trim().length === 0) {
+    errors.push("Description is required");
+  }
+  if (!gigData.category) {
+    errors.push("Category is required");
+  }
+  if (!gigData.pricing || !gigData.pricing.basic) {
+    errors.push("Basic pricing is required");
+  }
+
+  return errors;
+};
+
+// ============================================
+// HELPER: Check seller eligibility
+// ============================================
+const checkSellerEligibility = async (userId) => {
+  const user = await User.findById(userId);
+
+  if (!user) {
+    return { eligible: false, error: "User not found", user: null };
+  }
+
+  if (user.role !== "seller") {
+    return { eligible: false, error: "Only sellers can create gigs", user };
+  }
+
+  if (user.onboardingStep < 4) {
+    return {
+      eligible: false,
+      error: "Complete your seller profile (Step 4) before posting gigs",
+      user,
+      requiresProfileCompletion: true,
+    };
+  }
+
+  return { eligible: true, user };
+};
+
+// ============================================
+// CREATE GIG (Draft or Posted)
+// ============================================
 exports.createGig = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { title, gigImage, description, category, tags, pricing, deliveryTime } = req.body;
+    const {
+      title,
+      gigImage,
+      gigImagePublicId,
+      description,
+      category,
+      tags,
+      pricing,
+      deliveryTime,
+      saveAsDraft,
+    } = req.body;
 
-    // Validate required fields
-    if (!title || !description) {
-      return res.status(400).json({ error: "Title and description are required" });
-    }
+    const isDraft = saveAsDraft === true || saveAsDraft === "true";
 
     // Get user
     const user = await User.findById(userId);
@@ -17,7 +75,7 @@ exports.createGig = async (req, res) => {
       return res.status(403).json({ error: "User not found" });
     }
 
-    // ✅ ENFORCE: User must be a seller
+    // ✅ ENFORCE: User must be a seller (both for draft and posted)
     if (user.role !== "seller") {
       return res.status(403).json({
         error: "Only sellers can create gigs",
@@ -25,30 +83,47 @@ exports.createGig = async (req, res) => {
       });
     }
 
-    // ✅ ENFORCE: Seller must have completed profile foundation (at least Step 4)
-    // Step 4 = Profile Foundation (headline, about, skills, avatar)
-    // Sellers can create gigs once profile is complete
-    if (user.onboardingStep < 4) {
-      return res.status(403).json({
-        error: "Complete your seller profile (Step 4) before creating gigs",
-        currentStep: user.onboardingStep,
-        requiredStep: 4,
-      });
+    // Determine status
+    const gigStatus = isDraft ? "draft" : "posted";
+
+    // If posting (not saving as draft), validate required fields
+    if (!isDraft) {
+      const validationErrors = validateGigForPosting(req.body);
+      if (validationErrors.length > 0) {
+        return res.status(400).json({
+          error: "Validation failed",
+          details: validationErrors,
+        });
+      }
+
+      // Check seller profile completion for posted gigs
+      if (user.onboardingStep < 4) {
+        return res.status(403).json({
+          error: "Complete your seller profile (Step 4) before posting gigs",
+          currentStep: user.onboardingStep,
+          requiredStep: 4,
+        });
+      }
     }
 
     // Create gig
     const gig = await Gig.create({
       userId,
       gigImage: gigImage || null,
-      title: title.trim(),
-      description: description.trim(),
+      gigImagePublicId: gigImagePublicId || null,
+      title: title ? title.trim() : null,
+      description: description ? description.trim() : null,
       category: category ? category.trim() : null,
       tags: tags || [],
       pricing: pricing || {},
       deliveryTime: deliveryTime || null,
+      status: gigStatus,
     });
 
-    res.status(201).json(gig);
+    res.status(201).json({
+      message: isDraft ? "Gig saved as draft" : "Gig posted successfully",
+      gig,
+    });
   } catch (error) {
     console.error("Gig creation error:", error);
     res.status(500).json({ error: "Server error" });
@@ -79,6 +154,348 @@ exports.getAllUserGigs = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching user gigs:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// GET DRAFT GIGS
+// ============================================
+exports.getDraftGigs = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const drafts = await Gig.find({ userId, status: "draft" })
+      .populate("userId", "firstName lastName email role profilePicture")
+      .sort({ updatedAt: -1 }); // Show recently updated first
+
+    res.status(200).json({
+      message: "Draft gigs retrieved successfully",
+      totalDrafts: drafts.length,
+      gigs: drafts,
+    });
+  } catch (error) {
+    console.error("Error fetching draft gigs:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// GET POSTED GIGS
+// ============================================
+exports.getPostedGigs = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const postedGigs = await Gig.find({ userId, status: "posted" })
+      .populate("userId", "firstName lastName email role profilePicture")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      message: "Posted gigs retrieved successfully",
+      totalPosted: postedGigs.length,
+      gigs: postedGigs,
+    });
+  } catch (error) {
+    console.error("Error fetching posted gigs:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// SAVE DRAFT GIG (Create or Update)
+// ============================================
+exports.saveDraftGig = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const {
+      gigId, // If provided, update existing draft; otherwise create new
+      title,
+      gigImage,
+      gigImagePublicId,
+      description,
+      category,
+      tags,
+      pricing,
+      deliveryTime,
+    } = req.body;
+
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(403).json({ error: "User not found" });
+    }
+
+    // User must be a seller
+    if (user.role !== "seller") {
+      return res.status(403).json({
+        error: "Only sellers can create gigs",
+        role: user.role,
+      });
+    }
+
+    let gig;
+
+    if (gigId) {
+      // Update existing draft
+      gig = await Gig.findOne({ _id: gigId, userId, status: "draft" });
+
+      if (!gig) {
+        return res.status(404).json({
+          error: "Draft gig not found or already published",
+        });
+      }
+
+      // Update fields (only provided ones)
+      if (title !== undefined) gig.title = title.trim() || null;
+      if (description !== undefined) gig.description = description.trim() || null;
+      if (category !== undefined) gig.category = category ? category.trim() : null;
+      if (tags !== undefined) gig.tags = tags;
+      if (pricing !== undefined) gig.pricing = pricing;
+      if (deliveryTime !== undefined) gig.deliveryTime = deliveryTime;
+      if (gigImage !== undefined) gig.gigImage = gigImage;
+
+      await gig.save();
+    } else {
+      // Create new draft
+      gig = await Gig.create({
+        userId,
+        gigImage: gigImage || null,
+        title: title ? title.trim() : null,
+        description: description ? description.trim() : null,
+        category: category ? category.trim() : null,
+        tags: tags || [],
+        pricing: pricing || {},
+        deliveryTime: deliveryTime || null,
+        status: "draft",
+      });
+    }
+
+    res.status(201).json({
+      message: "Draft saved successfully",
+      gig,
+    });
+  } catch (error) {
+    console.error("Save draft error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// PUBLISH GIG (Convert Draft to Posted)
+// ============================================
+exports.publishGig = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { gigId } = req.params;
+
+    if (!gigId) {
+      return res.status(400).json({ error: "Gig ID is required" });
+    }
+
+    // Get user and check eligibility
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(403).json({ error: "User not found" });
+    }
+
+    // User must be a seller
+    if (user.role !== "seller") {
+      return res.status(403).json({
+        error: "Only sellers can publish gigs",
+        role: user.role,
+      });
+    }
+
+    // Check seller profile completion
+    if (user.onboardingStep < 4) {
+      return res.status(403).json({
+        error: "Complete your seller profile (Step 4) before publishing gigs",
+        currentStep: user.onboardingStep,
+        requiredStep: 4,
+      });
+    }
+
+    // Find the draft gig
+    const gig = await Gig.findOne({ _id: gigId, userId, status: "draft" });
+
+    if (!gig) {
+      return res.status(404).json({
+        error: "Draft gig not found or already published",
+      });
+    }
+
+    // Validate required fields for posting
+    const validationErrors = validateGigForPosting({
+      title: gig.title,
+      description: gig.description,
+      category: gig.category,
+      pricing: gig.pricing,
+    });
+
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: "Cannot publish - missing required fields",
+        details: validationErrors,
+        gig: gig, // Return the gig so frontend can show what's missing
+      });
+    }
+
+    // Publish the gig
+    gig.status = "posted";
+    await gig.save();
+
+    res.status(200).json({
+      message: "Gig published successfully",
+      gig,
+    });
+  } catch (error) {
+    console.error("Publish gig error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// UPDATE GIG (Both Draft and Posted)
+// ============================================
+exports.updateGig = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { gigId } = req.params;
+    const {
+      title,
+      gigImage,
+      description,
+      category,
+      tags,
+      pricing,
+      deliveryTime,
+      saveAsDraft,
+    } = req.body;
+
+    if (!gigId) {
+      return res.status(400).json({ error: "Gig ID is required" });
+    }
+
+    // Find the gig
+    const gig = await Gig.findOne({ _id: gigId, userId });
+
+    if (!gig) {
+      return res.status(404).json({ error: "Gig not found" });
+    }
+
+    // Get user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(403).json({ error: "User not found" });
+    }
+
+    const isDraft = gig.status === "draft";
+    const wantsToSaveAsDraft = saveAsDraft === true || saveAsDraft === "true";
+
+    // If converting to posted or updating posted gig, validate
+    if (!isDraft && !wantsToSaveAsDraft) {
+      // This is an update to a posted gig - keep it posted but validate
+      const validationErrors = validateGigForPosting({
+        title: title ?? gig.title,
+        description: description ?? gig.description,
+        category: category ?? gig.category,
+        pricing: pricing ?? gig.pricing,
+      });
+
+      if (validationErrors.length > 0) {
+        return res.status(400).json({
+          error: "Validation failed",
+          details: validationErrors,
+        });
+      }
+    }
+
+    // If saving as draft, no validation needed
+    if (wantsToSaveAsDraft) {
+      gig.status = "draft";
+    }
+
+    // Update fields
+    if (title !== undefined) gig.title = title.trim() || null;
+    if (description !== undefined) gig.description = description.trim() || null;
+    if (category !== undefined) gig.category = category ? category.trim() : null;
+    if (tags !== undefined) gig.tags = tags;
+    if (pricing !== undefined) gig.pricing = pricing;
+    if (deliveryTime !== undefined) gig.deliveryTime = deliveryTime;
+    if (gigImage !== undefined) gig.gigImage = gigImage;
+
+    await gig.save();
+
+    res.status(200).json({
+      message: wantsToSaveAsDraft ? "Gig saved as draft" : "Gig updated successfully",
+      gig,
+    });
+  } catch (error) {
+    console.error("Update gig error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// DELETE GIG
+// ============================================
+exports.deleteGig = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { gigId } = req.params;
+
+    if (!gigId) {
+      return res.status(400).json({ error: "Gig ID is required" });
+    }
+
+    const gig = await Gig.findOne({ _id: gigId, userId });
+
+    if (!gig) {
+      return res.status(404).json({ error: "Gig not found" });
+    }
+
+    await Gig.findByIdAndDelete(gigId);
+
+    res.status(200).json({
+      message: "Gig deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete gig error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+// ============================================
+// UNPUBLISH GIG (Convert Posted to Draft)
+// ============================================
+exports.unpublishGig = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { gigId } = req.params;
+
+    if (!gigId) {
+      return res.status(400).json({ error: "Gig ID is required" });
+    }
+
+    const gig = await Gig.findOne({ _id: gigId, userId, status: "posted" });
+
+    if (!gig) {
+      return res.status(404).json({
+        error: "Posted gig not found or already a draft",
+      });
+    }
+
+    // Convert to draft
+    gig.status = "draft";
+    await gig.save();
+
+    res.status(200).json({
+      message: "Gig unpublished - saved as draft",
+      gig,
+    });
+  } catch (error) {
+    console.error("Unpublish gig error:", error);
     res.status(500).json({ error: "Server error" });
   }
 };
