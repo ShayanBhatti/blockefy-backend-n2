@@ -67,6 +67,20 @@ const uploadImage = multer({
 });
 
 /**
+ * Order file upload middleware
+ * - Memory storage only
+ * - 5MB file size limit
+ * - Single file upload
+ * - Accepts every file type (order files can be PDFs, docs, zip, images, etc.)
+ */
+const uploadOrderFile = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit
+  },
+});
+
+/**
  * Middleware for handling multer errors
  * Converts multer errors to readable API responses
  */
@@ -108,5 +122,6 @@ const handleUploadError = (error, req, res, next) => {
 
 module.exports = {
   uploadImage,
+  uploadOrderFile,
   handleUploadError,
 };

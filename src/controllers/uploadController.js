@@ -226,6 +226,58 @@ const uploadVerificationDocument = async (req, res) => {
     });
   }
 };
+const uploadOrderFile = async (req, res) => {
+  console.log("Upload order file request received");
+  try {
+    // Validate file exists
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "No file provided. Please upload a file.",
+        error: "NO_FILE",
+      });
+    }
+
+    // Upload to Cloudinary
+    const fileData = await uploadService.uploadImage(
+      req.file,
+      "blockefy/order-files",
+    );
+
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: "Order file uploaded successfully",
+      data: {
+        url: fileData.url,
+        publicId: fileData.publicId,
+        width: fileData.width,
+        height: fileData.height,
+        format: fileData.format,
+        size: fileData.size,
+      },
+    });
+  } catch (error) {
+    console.error("Upload order file error:", error);
+
+    let statusCode = 500;
+    let errorMessage = "Order file upload failed";
+
+    if (error.message.includes("Invalid file type")) {
+      statusCode = 415;
+      errorMessage = error.message;
+    } else if (error.message.includes("File size")) {
+      statusCode = 413;
+      errorMessage = error.message;
+    }
+
+    return res.status(statusCode).json({
+      success: false,
+      message: errorMessage,
+      error: "UPLOAD_FAILED",
+    });
+  }
+};
 
 /**
  * Delete uploaded image from Cloudinary
@@ -313,5 +365,6 @@ module.exports = {
   uploadCoverImage,
   uploadVerificationDocument,
   uploadGigImage,
+  uploadOrderFile,
   deleteUploadedImage,
 };

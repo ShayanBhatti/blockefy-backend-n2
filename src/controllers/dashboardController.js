@@ -56,7 +56,7 @@ const getSellerStats = async (req, res) => {
     // Get active orders count
     const activeOrders = await Order.countDocuments({
       sellerId: userId,
-      status: { $in: ["pending", "active", "in_progress", "review"] },
+      status: { $in: ["PAID", "REQUIREMENTS_NEEDED", "IN_PROGRESS", "DELIVERED", "REVISION_REQUESTED"] },
     });
 
     // Get completed orders count (this month)
@@ -404,7 +404,7 @@ const getBuyerStats = async (req, res) => {
     // Get active orders count (as buyer)
     const activeOrders = await Order.countDocuments({
       buyerId: userId,
-      status: { $in: ["pending", "active", "in_progress", "review"] },
+      status: { $in: ["PAID", "REQUIREMENTS_NEEDED", "IN_PROGRESS", "DELIVERED", "REVISION_REQUESTED"] },
     });
 
     // Get open proposals count (for buyer's projects)

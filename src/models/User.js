@@ -26,8 +26,17 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["buyer", "seller"],
+      enum: ["buyer", "seller", "admin"],
       default: "buyer",
+    },
+    isSuspended: {
+      type: Boolean,
+      default: false,
+      // Suspended users cannot place orders, submit deliveries, etc.
+    },
+    suspendedAt: {
+      type: Date,
+      default: null,
     },
     // ============================================================================
     // BACKWARD COMPATIBILITY: Keep authProvider for existing code

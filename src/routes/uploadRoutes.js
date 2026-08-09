@@ -3,6 +3,7 @@ const router = express.Router();
 const uploadController = require("../controllers/uploadController");
 const {
   uploadImage,
+  uploadOrderFile,
   handleUploadError,
 } = require("../middleware/uploadMiddleware");
 const { verifyToken } = require("../middleware/authMiddleware");
@@ -64,6 +65,15 @@ router.post(
   handleUploadError,
   uploadController.uploadVerificationDocument,
 );
+ 
+router.post(
+  "/order-file",
+  verifyToken,
+  uploadOrderFile.single("orderFile"),
+  handleUploadError,
+  uploadController.uploadOrderFile
+
+)
 
 /**
  * DELETE /api/upload/:publicId
