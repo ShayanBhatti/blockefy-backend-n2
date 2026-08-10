@@ -9,6 +9,9 @@ const Notification = require("../models/Notification");
 const Activity = require("../models/Activity");
 const User = require("../models/User");
 
+// JWT payload carries the user id under `userId` (verifyToken sets req.user = decoded)
+const getUserId = (req) => req.user?.userId || req.user?._id;
+
 // Helper function to calculate profile strength
 const calculateProfileStrength = async (userId, role) => {
   const user = await User.findById(userId).lean();
@@ -51,7 +54,7 @@ const calculateProfileStrength = async (userId, role) => {
  */
 const getSellerStats = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
 
     // Get active orders count
     const activeOrders = await Order.countDocuments({
@@ -66,7 +69,7 @@ const getSellerStats = async (req, res) => {
 
     const completedOrdersThisMonth = await Order.countDocuments({
       sellerId: userId,
-      status: "completed",
+      status: "COMPLETED",
       completedAt: { $gte: startOfMonth },
     });
 
@@ -75,7 +78,7 @@ const getSellerStats = async (req, res) => {
       {
         $match: {
           sellerId: userId,
-          status: "completed",
+          status: "COMPLETED",
           createdAt: { $gte: startOfMonth },
         },
       },
@@ -93,7 +96,7 @@ const getSellerStats = async (req, res) => {
       {
         $match: {
           sellerId: userId,
-          status: "completed",
+          status: "COMPLETED",
         },
       },
       {
@@ -147,7 +150,7 @@ const getSellerStats = async (req, res) => {
     // Get delivery rate (completed on time / total completed)
     const completedOnTime = await Order.countDocuments({
       sellerId: userId,
-      status: "completed",
+      status: "COMPLETED",
       isLate: false,
     });
     const deliveryRate = totalOrders > 0 ? Math.round((completedOnTime / totalOrders) * 100) : 100;
@@ -184,14 +187,14 @@ const getSellerStats = async (req, res) => {
  */
 const getSellerOrders = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { status, limit = 10, page = 1 } = req.query;
 
     const query = { sellerId: userId };
     if (status) {
       query.status = status;
     } else {
-      query.status = { $in: ["pending", "active", "in_progress", "review"] };
+      query.status = { $in: ["PAID", "REQUIREMENTS_NEEDED", "IN_PROGRESS", "DELIVERED", "REVISION_REQUESTED"] };
     }
 
     const skip = (page - 1) * limit;
@@ -229,7 +232,7 @@ const getSellerOrders = async (req, res) => {
  */
 const getSellerGigs = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { limit = 10, page = 1 } = req.query;
 
     const skip = (page - 1) * limit;
@@ -273,7 +276,7 @@ const getSellerGigs = async (req, res) => {
  */
 const getSellerEarnings = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { period = "30d" } = req.query;
 
     let days = 30;
@@ -289,7 +292,7 @@ const getSellerEarnings = async (req, res) => {
       {
         $match: {
           sellerId: userId,
-          status: "completed",
+          status: "COMPLETED",
           createdAt: { $gte: startDate },
         },
       },
@@ -351,7 +354,7 @@ const getSellerEarnings = async (req, res) => {
  */
 const getSellerReviews = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { limit = 10, page = 1 } = req.query;
 
     const skip = (page - 1) * limit;
@@ -393,7 +396,7 @@ const getSellerReviews = async (req, res) => {
  */
 const getBuyerStats = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
 
     // Get active projects count
     const activeProjects = await Project.countDocuments({
@@ -430,7 +433,7 @@ const getBuyerStats = async (req, res) => {
       {
         $match: {
           buyerId: userId,
-          status: "completed",
+          status: "COMPLETED",
           createdAt: { $gte: startOfMonth },
         },
       },
@@ -448,7 +451,7 @@ const getBuyerStats = async (req, res) => {
       {
         $match: {
           buyerId: userId,
-          status: "completed",
+          status: "COMPLETED",
         },
       },
       {
@@ -469,11 +472,11 @@ const getBuyerStats = async (req, res) => {
     // Get profile completion
     const user = await User.findById(userId).lean();
     let profileCompletion = 0;
-    if (user.fullName) profileCompletion += 20;
-    if (user.username) profileCompletion += 20;
-    if (user.profileImage?.url) profileCompletion += 20;
-    if (user.buyerProfile?.company) profileCompletion += 20;
-    if (user.buyerProfile?.budgetRange?.min) profileCompletion += 20;
+    if (user?.fullName) profileCompletion += 20;
+    if (user?.username) profileCompletion += 20;
+    if (user?.profileImage?.url) profileCompletion += 20;
+    if (user?.buyerProfile?.company) profileCompletion += 20;
+    if (user?.buyerProfile?.budgetRange?.min) profileCompletion += 20;
 
     res.json({
       success: true,
@@ -501,7 +504,7 @@ const getBuyerStats = async (req, res) => {
  */
 const getBuyerProjects = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { status, limit = 10, page = 1 } = req.query;
 
     const query = { buyerId: userId };
@@ -542,14 +545,14 @@ const getBuyerProjects = async (req, res) => {
  */
 const getBuyerOrders = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { status, limit = 10, page = 1 } = req.query;
 
     const query = { buyerId: userId };
     if (status) {
       query.status = status;
     } else {
-      query.status = { $in: ["pending", "active", "in_progress", "review"] };
+      query.status = { $in: ["PAID", "REQUIREMENTS_NEEDED", "IN_PROGRESS", "DELIVERED", "REVISION_REQUESTED"] };
     }
 
     const skip = (page - 1) * limit;
@@ -587,7 +590,7 @@ const getBuyerOrders = async (req, res) => {
  */
 const getBuyerProposals = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { status, limit = 10, page = 1 } = req.query;
 
     // Get buyer's project IDs
@@ -698,7 +701,7 @@ const getRecommendedTalent = async (req, res) => {
  */
 const getRecentActivity = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { limit = 20, category } = req.query;
 
     const query = { userId };
@@ -727,7 +730,7 @@ const getRecentActivity = async (req, res) => {
  */
 const getNotifications = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { unreadOnly, limit = 20, page = 1 } = req.query;
 
     const query = { userId };
@@ -770,7 +773,7 @@ const getNotifications = async (req, res) => {
  */
 const markNotificationRead = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
     const { id } = req.params;
 
     const notification = await Notification.markAsRead(id, userId);
@@ -792,7 +795,7 @@ const markNotificationRead = async (req, res) => {
  */
 const markAllNotificationsRead = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
 
     await Notification.markAllAsRead(userId);
 
@@ -809,7 +812,7 @@ const markAllNotificationsRead = async (req, res) => {
  */
 const getWalletInfo = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = getUserId(req);
 
     const balance = await Transaction.getUserBalance(userId);
 

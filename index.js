@@ -13,6 +13,7 @@ const dashboardRoutes = require("./src/routes/dashboardRoutes");
 const orderRoutes = require("./src/routes/orderRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
 const adminOrderRoutes = require("./src/routes/adminOrderRoutes");
+const sellerRoutes = require("./src/routes/sellerRoutes");
 const errorHandler = require("./src/middleware/errorHandler");
 const { createRateLimiter } = require("./src/middleware/rateLimiter");
 const jobs = require("./src/jobs");
@@ -80,6 +81,7 @@ app.use("/api/upload", uploadRoutes);
 app.use("/dashboard", dashboardRoutes);
 app.use("/orders", orderRoutes);
 app.use("/api/admin/orders", adminOrderRoutes);
+app.use("/api/seller", sellerRoutes);
 
 // 404 for unknown API routes
 app.use("/api", (req, res) => {
