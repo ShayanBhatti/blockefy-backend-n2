@@ -1,5 +1,6 @@
 const config = require("../config/orderConfig");
 const orderService = require("../services/order.service");
+const { markExpiredMissedCalls } = require("./call.job");
 
 /**
  * Background jobs for the order system.
@@ -11,11 +12,11 @@ const orderService = require("../services/order.service");
  * Deadlines are NEVER implemented with setTimeout in request handlers.
  */
 
-let running = false;
+let running = {};
 
 const runSafe = async (name, fn) => {
-  if (running) return;
-  running = true;
+  if (running[name]) return;
+  running[name] = true;
   try {
     console.log(`[job] ${name} starting`);
     const result = await fn();
@@ -23,7 +24,7 @@ const runSafe = async (name, fn) => {
   } catch (error) {
     console.error(`[job] ${name} failed:`, error.message);
   } finally {
-    running = false;
+    running[name] = false;
   }
 };
 
@@ -32,6 +33,9 @@ const autoCompleteOrders = () =>
 
 const reconcilePayments = () =>
   runSafe("reconcile-payments", () => orderService.cancelStalePendingOrders());
+
+const markMissedCalls = () =>
+  runSafe("mark-missed-calls", markExpiredMissedCalls);
 
 /**
  * Start the in-process scheduler.
@@ -42,16 +46,20 @@ const startScheduler = () => {
 
   const REVIEW_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
   const RECONCILE_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
+  const CALL_MISSED_INTERVAL_MS = 10 * 1000; // every 10 seconds
 
   const autoCompleteTimer = setInterval(autoCompleteOrders, REVIEW_INTERVAL_MS);
   const reconcileTimer = setInterval(reconcilePayments, RECONCILE_INTERVAL_MS);
+  const callMissedTimer = setInterval(markMissedCalls, CALL_MISSED_INTERVAL_MS);
   if (autoCompleteTimer.unref) autoCompleteTimer.unref();
   if (reconcileTimer.unref) reconcileTimer.unref();
+  if (callMissedTimer.unref) callMissedTimer.unref();
 
   // Kick off once shortly after boot.
   const bootTimer = setTimeout(() => {
     autoCompleteOrders();
     reconcilePayments();
+    markMissedCalls();
   }, 5000);
   if (bootTimer.unref) bootTimer.unref();
 
@@ -64,6 +72,7 @@ const startScheduler = () => {
 const runOnce = async () => {
   await autoCompleteOrders();
   await reconcilePayments();
+  await markMissedCalls();
 };
 
-module.exports = { startScheduler, runOnce, autoCompleteOrders, reconcilePayments };
+module.exports = { startScheduler, runOnce, autoCompleteOrders, reconcilePayments, markMissedCalls };

@@ -38,6 +38,8 @@ const notificationSchema = new mongoose.Schema({
       "review_response_requested",
       // Message notifications
       "message_received",
+      // Call notifications
+      "incoming_call",
       // General notifications
       "account_verified",
       "profile_completed",

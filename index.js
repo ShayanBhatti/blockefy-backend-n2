@@ -14,6 +14,10 @@ const orderRoutes = require("./src/routes/orderRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
 const adminOrderRoutes = require("./src/routes/adminOrderRoutes");
 const sellerRoutes = require("./src/routes/sellerRoutes");
+const communicationRoutes = require("./src/routes/communicationRoutes");
+const callRoutes = require("./src/routes/callRoutes");
+const livekitWebhookRoutes = require("./src/routes/livekitWebhookRoutes");
+const realtimeService = require("./src/services/realtime.service");
 const errorHandler = require("./src/middleware/errorHandler");
 const { createRateLimiter } = require("./src/middleware/rateLimiter");
 const jobs = require("./src/jobs");
@@ -25,9 +29,9 @@ app.use(helmet());
 
 // CORS
 app.use(cors({
-  origin: "*",
+  origin: process.env.FRONTEND_URL || true,
   credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 }));
 
@@ -53,6 +57,10 @@ app.use(async (req, res, next) => {
 // raw request body is available for signature verification.
 // =====================================================================
 app.use("/api/payments", paymentRoutes);
+
+// LiveKit webhooks MUST also receive the raw body (LiveKit signs the exact
+// bytes + uses the `Authorize` header). Mounted before the global parsers.
+app.use("/api/webhooks", livekitWebhookRoutes);
 
 // Body parsers (size-capped to reject oversized payloads)
 app.use(express.json({ limit: "1mb" }));
@@ -82,6 +90,8 @@ app.use("/dashboard", dashboardRoutes);
 app.use("/orders", orderRoutes);
 app.use("/api/admin/orders", adminOrderRoutes);
 app.use("/api/seller", sellerRoutes);
+app.use("/api", communicationRoutes);
+app.use("/api/calls", callRoutes);
 
 // 404 for unknown API routes
 app.use("/api", (req, res) => {
@@ -106,9 +116,11 @@ if (require.main === module && process.env.NODE_ENV !== "production") {
 // Local development server (NO app.listen for Vercel)
 if (require.main === module && process.env.NODE_ENV !== "production") {
   const port = process.env.PORT || 7980;
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
   });
+  // Realtime (Socket.IO) binds to the same HTTP server.
+  realtimeService.init(server);
 }
 
 // Export for Vercel
