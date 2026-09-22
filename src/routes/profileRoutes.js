@@ -28,7 +28,8 @@ router.put(
   profileController.updateBasicProfile
 );
 
-// PUT /profile/update-seller - Update seller-specific profile (sellers only)
+// PUT /profile/update-seller - Update profile sections (skills, experience,
+// education, portfolio, languages) for any authenticated user
 router.put(
   "/update-seller",
   authMiddleware.verifyToken,
@@ -36,7 +37,8 @@ router.put(
   profileController.updateSellerProfile
 );
 
-// PUT /profile/update-buyer - Update buyer-specific profile (buyers only)
+// PUT /profile/update-buyer - Update client details (company, interests,
+// budget, preferred categories) for any authenticated user
 router.put(
   "/update-buyer",
   authMiddleware.verifyToken,

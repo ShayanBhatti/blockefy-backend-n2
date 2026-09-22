@@ -44,6 +44,13 @@ const orderActionUrl = (orderId) =>
 
 const orderRelatedEntity = (orderId) => ({ type: "order", id: orderId });
 
+const projectActionUrl = (projectId) =>
+  `${process.env.FRONTEND_URL || "http://localhost:3000"}/projects/${projectId}`;
+
+const projectRelatedEntity = (projectId) => ({ type: "project", id: projectId });
+
+const milestoneRelatedEntity = (milestoneId) => ({ type: "milestone", id: milestoneId });
+
 const notify = {
   orderCreated: (userId, orderId, orderNumber) =>
     createNotification({
@@ -155,9 +162,117 @@ const notify = {
     }),
 };
 
+const notifyProject = {
+  proposalReceived: (buyerId, projectId, sellerName) =>
+    createNotification({
+      userId: buyerId,
+      type: "proposal_received",
+      title: "New proposal received",
+      message: `${sellerName} sent you a proposal. Review it to start your project.`,
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: projectRelatedEntity(projectId),
+    }),
+  proposalAccepted: (sellerId, projectId) =>
+    createNotification({
+      userId: sellerId,
+      type: "proposal_accepted",
+      title: "Proposal accepted",
+      message: "Your proposal was accepted. The project has been assigned to you.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: projectRelatedEntity(projectId),
+    }),
+  proposalRejected: (sellerId, projectId) =>
+    createNotification({
+      userId: sellerId,
+      type: "proposal_rejected",
+      title: "Proposal not accepted",
+      message: "The buyer could not accept your proposal on this project.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: projectRelatedEntity(projectId),
+    }),
+  milestoneFunded: (sellerId, projectId, milestoneId) =>
+    createNotification({
+      userId: sellerId,
+      type: "milestone_funded",
+      title: "Milestone funded",
+      message: "A milestone deposit was confirmed in escrow. You can start working.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: milestoneRelatedEntity(milestoneId),
+    }),
+  milestoneSubmitted: (buyerId, projectId, milestoneId) =>
+    createNotification({
+      userId: buyerId,
+      type: "milestone_submitted",
+      title: "Work submitted",
+      message: "The freelancer submitted work for your review.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: milestoneRelatedEntity(milestoneId),
+    }),
+  milestoneCompleted: (sellerId, projectId, milestoneId) =>
+    createNotification({
+      userId: sellerId,
+      type: "milestone_completed",
+      title: "Milestone released",
+      message: "Your milestone payment was released from escrow.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: milestoneRelatedEntity(milestoneId),
+    }),
+  revisionRequested: (sellerId, projectId, milestoneId) =>
+    createNotification({
+      userId: sellerId,
+      type: "milestone_revision_requested",
+      title: "Revision requested",
+      message: "The buyer requested changes on your submitted work.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: milestoneRelatedEntity(milestoneId),
+    }),
+  depositCompleted: (buyerId, projectId) =>
+    createNotification({
+      userId: buyerId,
+      type: "deposit_completed",
+      title: "Deposit confirmed",
+      message: "Your escrow deposit was confirmed on-chain.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: projectRelatedEntity(projectId),
+    }),
+  paymentReleased: (sellerId, projectId, milestoneId) =>
+    createNotification({
+      userId: sellerId,
+      type: "payment_released",
+      title: "Payment released",
+      message: "Escrow funds were released to your account.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: milestoneRelatedEntity(milestoneId),
+    }),
+  paymentRefunded: (buyerId, projectId) =>
+    createNotification({
+      userId: buyerId,
+      type: "payment_refunded",
+      title: "Funds refunded",
+      message: "Your escrowed funds were refunded.",
+      actionUrl: projectActionUrl(projectId),
+      relatedEntity: projectRelatedEntity(projectId),
+    }),
+  disputeOpened: (projectId, buyerId, sellerId) => {
+    const payload = (userId) =>
+      createNotification({
+        userId,
+        type: "warning",
+        title: "Dispute opened",
+        message: "A dispute was opened on a project. Normal actions are paused.",
+        actionUrl: projectActionUrl(projectId),
+        relatedEntity: projectRelatedEntity(projectId),
+      });
+    return Promise.all([payload(buyerId), payload(sellerId)]);
+  },
+};
+
 module.exports = {
   createNotification,
   notify,
+  notifyProject,
   orderActionUrl,
   orderRelatedEntity,
+  projectActionUrl,
+  projectRelatedEntity,
 };

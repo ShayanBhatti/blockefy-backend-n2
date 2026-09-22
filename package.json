@@ -10,6 +10,7 @@
     "live": "concurrently -k -n BACKEND,CLOUDFLARE \"nodemon index.js\" \"cloudflared tunnel --url http://localhost:5000\"",
     "start": "node index.js",
     "jobs": "node src/jobs/run-once.js",
+    "seed:users": "node src/seeders/seedUsers.js",
     "lint": "node --check index.js"
   },
   "keywords": [],

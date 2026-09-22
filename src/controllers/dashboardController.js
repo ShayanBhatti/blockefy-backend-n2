@@ -8,9 +8,16 @@ const Transaction = require("../models/Transaction");
 const Notification = require("../models/Notification");
 const Activity = require("../models/Activity");
 const User = require("../models/User");
+const mongoose = require("mongoose");
 
-// JWT payload carries the user id under `userId` (verifyToken sets req.user = decoded)
-const getUserId = (req) => req.user?.userId || req.user?._id;
+// JWT payload carries the user id under `userId` (verifyToken sets req.user = decoded).
+// Returns a real ObjectId so aggregate $match stages match stored ObjectId refs
+// (string equality in $match is NOT auto-cast by the server).
+const getUserId = (req) => {
+  const raw = req.user?.userId || req.authUser?._id || req.user?._id;
+  if (!raw) return null;
+  return mongoose.Types.ObjectId.isValid(raw) ? new mongoose.Types.ObjectId(String(raw)) : raw;
+};
 
 // Helper function to calculate profile strength
 const calculateProfileStrength = async (userId, role) => {
@@ -158,6 +165,21 @@ const getSellerStats = async (req, res) => {
     // Get review stats
     const reviewStats = await Review.calculateAverageRating(userId);
 
+    // ---- Web3 escrow workspace (additive; used by the new project dashboard) ----
+    const activeProjects = await Project.countDocuments({
+      hiredSellerId: userId,
+      status: { $in: ["in_progress", "disputed"] },
+    });
+    const deliveredForReview = await Milestone.countDocuments({
+      sellerId: userId,
+      status: "submitted",
+    });
+    const ethEarningsAgg = await Transaction.aggregate([
+      { $match: { userId, status: "completed", type: "escrow_released" } },
+      { $group: { _id: null, total: { $sum: "$cryptoAmount" } } },
+    ]);
+    const totalEarningsEth = ethEarningsAgg[0]?.total || 0;
+
     res.json({
       success: true,
       data: {
@@ -173,6 +195,10 @@ const getSellerStats = async (req, res) => {
         deliveryRate,
         averageRating: reviewStats.avgRating,
         totalReviews: reviewStats.totalReviews,
+        // Web3 workspace fields
+        activeProjects,
+        deliveredForReview,
+        totalEarningsEth,
       },
     });
   } catch (error) {
@@ -469,6 +495,47 @@ const getBuyerStats = async (req, res) => {
     // Get unread notifications count
     const unreadNotifications = await Notification.getUnreadCount(userId);
 
+    // ---- Web3 escrow workspace (additive; used by the new project dashboard) ----
+    const escrowTxAgg = await Transaction.aggregate([
+      {
+        $match: { userId, projectId: { $exists: true }, status: "completed", type: { $in: ["escrow_funded", "escrow_released", "escrow_refunded"] } },
+      },
+      { $group: { _id: "$type", total: { $sum: "$cryptoAmount" }, count: { $sum: 1 } } },
+    ]);
+    const escrowRows = escrowTxAgg.reduce((acc, r) => ({ ...acc, [r._id]: r }), {});
+    const totalSpendingEth = (escrowRows.escrow_funded?.total || 0)
+      - (escrowRows.escrow_refunded?.total || 0);
+    const milestonesInReview = await Milestone.countDocuments({
+      buyerId: userId,
+      status: "submitted",
+    });
+
+    // ---- Escrow-committed / released amounts (Smart Contract workspace) ----
+    const [committedAgg, releasedAgg, fundedMonthlyAgg] = await Promise.all([
+      Milestone.aggregate([
+        { $match: { buyerId: userId, amount: { $gt: 0 } } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Milestone.aggregate([
+        { $match: { buyerId: userId, paymentStatus: "released" } },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
+      Transaction.aggregate([
+        {
+          $match: {
+            userId,
+            type: "escrow_funded",
+            status: "completed",
+            createdAt: { $gte: startOfMonth },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$cryptoAmount" } } },
+      ]),
+    ]);
+    const escrowCommittedEth = Math.round((committedAgg[0]?.total || 0) * 100) / 100;
+    const escrowReleasedEth = Math.round((releasedAgg[0]?.total || 0) * 100) / 100;
+    const monthlySpendingEth = Math.round((fundedMonthlyAgg[0]?.total || 0) * 100) / 100;
+
     // Get profile completion
     const user = await User.findById(userId).lean();
     let profileCompletion = 0;
@@ -490,6 +557,12 @@ const getBuyerStats = async (req, res) => {
         walletBalance,
         unreadNotifications,
         profileCompletion,
+        // Web3 workspace fields
+        totalSpendingEth,
+        escrowCommittedEth,
+        escrowReleasedEth,
+        monthlySpendingEth,
+        milestonesInReview,
       },
     });
   } catch (error) {

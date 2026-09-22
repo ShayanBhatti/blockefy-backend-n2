@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const Gig = require("../models/Gig");
 const { uploadToCloudinary } = require("../utils/cloudinary");
 
 /**
@@ -9,7 +10,7 @@ const { uploadToCloudinary } = require("../utils/cloudinary");
 const sanitizeUserData = (user) => {
   if (!user) return null;
 
-  const response = {
+  return {
     id: user._id,
     email: user.email,
     fullName: user.fullName,
@@ -26,32 +27,29 @@ const sanitizeUserData = (user) => {
       tagline: user.profile?.tagline || null,
       about: user.profile?.about || null,
     },
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-  };
-
-  // Add role-specific profile
-  if (user.role === "seller") {
-    response.sellerProfile = {
+    // Any authenticated user may maintain every section, so all sub-profiles
+    // are always returned regardless of the user's role. This lets both
+    // sellers and clients list skills, experience, education, portfolio,
+    // languages, and client details on their profile.
+    sellerProfile: {
       skills: user.sellerProfile?.skills || [],
       experience: user.sellerProfile?.experience || [],
       education: user.sellerProfile?.education || [],
       portfolio: user.sellerProfile?.portfolio || [],
       languages: user.sellerProfile?.languages || [],
-    };
-  } else if (user.role === "buyer") {
-    response.buyerProfile = {
-      company: user.buyerProfile?.company || null,
+    },
+    buyerProfile: {
+      company: user.buyerProfile?.company ?? null,
       interests: user.buyerProfile?.interests || [],
       budgetRange: {
-        min: user.buyerProfile?.budgetRange?.min || null,
-        max: user.buyerProfile?.budgetRange?.max || null,
+        min: user.buyerProfile?.budgetRange?.min ?? null,
+        max: user.buyerProfile?.budgetRange?.max ?? null,
       },
       preferredCategories: user.buyerProfile?.preferredCategories || [],
-    };
-  }
-
-  return response;
+    },
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
 };
 
 /**
@@ -75,6 +73,27 @@ exports.getMyProfile = async (req, res) => {
 
     // Sanitize and return user data
     const sanitizedUser = sanitizeUserData(user);
+
+    // Include the user's posted services so the profile page can render the
+    // full "Services" section from a single request.
+    const postedGigs = await Gig.find({ userId, status: "posted" })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    sanitizedUser.totalGigs = postedGigs.length;
+    sanitizedUser.gigs = postedGigs.map((gig) => ({
+      id: gig._id,
+      title: gig.title,
+      description: gig.description,
+      category: gig.category,
+      tags: gig.tags || [],
+      status: gig.status,
+      pricing: gig.pricing,
+      packages: gig.packages || [],
+      deliveryTime: gig.deliveryTime,
+      gigImage: gig.gigImage || null,
+      createdAt: gig.createdAt,
+    }));
 
     res.json({
       success: true,
@@ -160,19 +179,13 @@ exports.updateSellerProfile = async (req, res) => {
     const userId = req.user.userId;
     const { skills, experience, education, portfolio, languages } = req.body;
 
-    // Check if user is a seller
+    // Verify user exists (any authenticated role may update these fields:
+    // sellers and clients alike can list skills, experience, education, etc.)
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
         message: "User not found",
-      });
-    }
-
-    if (user.role !== "seller") {
-      return res.status(403).json({
-        success: false,
-        message: "Only sellers can update seller profile",
       });
     }
 
@@ -306,19 +319,12 @@ exports.updateBuyerProfile = async (req, res) => {
     const userId = req.user.userId;
     const { company, interests, budgetRange, preferredCategories } = req.body;
 
-    // Check if user is a buyer
+    // Verify user exists (any authenticated role may update these fields)
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
         message: "User not found",
-      });
-    }
-
-    if (user.role !== "buyer") {
-      return res.status(403).json({
-        success: false,
-        message: "Only buyers can update buyer profile",
       });
     }
 

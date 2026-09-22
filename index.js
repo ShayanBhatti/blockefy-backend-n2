@@ -17,6 +17,10 @@ const sellerRoutes = require("./src/routes/sellerRoutes");
 const communicationRoutes = require("./src/routes/communicationRoutes");
 const callRoutes = require("./src/routes/callRoutes");
 const livekitWebhookRoutes = require("./src/routes/livekitWebhookRoutes");
+const projectRoutes = require("./src/routes/projectRoutes");
+const proposalRoutes = require("./src/routes/proposalRoutes");
+const milestoneRoutes = require("./src/routes/milestoneRoutes");
+const escrowRoutes = require("./src/routes/escrowRoutes");
 const realtimeService = require("./src/services/realtime.service");
 const errorHandler = require("./src/middleware/errorHandler");
 const { createRateLimiter } = require("./src/middleware/rateLimiter");
@@ -92,6 +96,12 @@ app.use("/api/admin/orders", adminOrderRoutes);
 app.use("/api/seller", sellerRoutes);
 app.use("/api", communicationRoutes);
 app.use("/api/calls", callRoutes);
+
+// Web3 escrow flow (project -> proposal -> milestone -> escrow)
+app.use("/api", projectRoutes);
+app.use("/api", proposalRoutes);
+app.use("/api", milestoneRoutes);
+app.use("/api", escrowRoutes);
 
 // 404 for unknown API routes
 app.use("/api", (req, res) => {

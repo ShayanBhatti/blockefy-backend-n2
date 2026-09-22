@@ -58,13 +58,22 @@ const proposalSchema = new mongoose.Schema({
   // Status
   status: {
     type: String,
-    enum: ["pending", "submitted", "viewed", "shortlisted", "accepted", "rejected", "withdrawn", "expired"],
+    enum: ["pending", "submitted", "viewed", "shortlisted", "accepted", "rejected", "revision_requested", "withdrawn", "expired"],
     default: "submitted",
+  },
+  // Reason captured when a buyer rejects with feedback / requests revisions.
+  revisionReason: {
+    type: String,
+    default: null,
   },
   // Tracking
   submittedAt: {
     type: Date,
     default: Date.now,
+  },
+  acceptedAt: {
+    type: Date,
+    default: null,
   },
   viewedAt: {
     type: Date,

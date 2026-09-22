@@ -9,7 +9,7 @@ const milestoneSchema = new mongoose.Schema({
   orderId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Order",
-    required: true,
+    default: null,
   },
   projectId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -43,6 +43,16 @@ const milestoneSchema = new mongoose.Schema({
     required: true,
     min: 0,
   },
+  // On-chain escrow id for this milestone.
+  onChainMilestoneId: {
+    type: Number,
+    default: null,
+  },
+  // Payment currency (pure ETH for the escrow flow).
+  currency: {
+    type: String,
+    default: "ETH",
+  },
   dueDate: {
     type: Date,
     required: true,
@@ -52,6 +62,12 @@ const milestoneSchema = new mongoose.Schema({
     type: String,
     enum: ["pending", "funded", "in_progress", "submitted", "revision_requested", "completed", "cancelled", "disputed"],
     default: "pending",
+  },
+  // Work submission phase (works for both milestone and project-level delivery).
+  deliveryType: {
+    type: String,
+    enum: ["milestone", "project"],
+    default: "milestone",
   },
   // Payment
   paymentStatus: {

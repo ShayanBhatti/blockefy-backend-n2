@@ -6,6 +6,18 @@ const projectSchema = new mongoose.Schema({
     unique: true,
     required: true,
   },
+  // On-chain escrow contract reference.
+  onChainProjectId: {
+    type: Number,
+    default: null,
+  },
+  // Payment model used on-chain. The escrow flow always uses Milestones
+  // (single-milestone projects behave like a one-time FixClaim).
+  onChainProjectType: {
+    type: String,
+    enum: ["fixclaim", "milestones"],
+    default: "milestones",
+  },
   buyerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
@@ -129,9 +141,18 @@ const projectSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  cancelledAt: {
+    type: Date,
+    default: null,
+  },
   cancelReason: {
     type: String,
     default: null,
+  },
+  // Flexible bag for tx hashes / misc extras
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {},
   },
 }, {
   timestamps: true,

@@ -21,7 +21,7 @@ const Transaction = require("../src/models/Transaction");
 const orderService = require("../src/services/order.service");
 const paymentService = require("../src/services/payment.service");
 
-let buyer, seller, gig, order;
+let buyer, seller, gig, order, basicPackageId;
 
 before(async () => {
   if (skip) return;
@@ -55,18 +55,19 @@ before(async () => {
     category: "web-development",
     tags: ["react"],
     pricing: {
-      basic: { price: 100, deliveryTime: 5 },
+      basic: 100,
     },
     packages: [
-      { packageId: "basic", name: "Basic", price: 100, deliveryDays: 5, revisions: 2, features: ["1 page"] },
+      { name: "Basic", price: 100, deliveryDays: 5, revisions: 2, features: ["1 page"] },
     ],
   });
+  basicPackageId = gig.packages[0]._id;
   // Fund the buyer wallet.
   await Transaction.create({
     transactionNumber: `TXN-TEST-${Date.now()}`,
     userId: buyer._id,
     type: "deposit",
-    amount: Number(process.env.WALLET_DEPOSIT || 100),
+    amount: Number(process.env.WALLET_DEPOSIT || 1000),
     currency: "USD",
     status: "completed",
     paymentMethod: "wallet",
@@ -92,7 +93,7 @@ it("full order lifecycle: place → pay → requirements → deliver → revise 
   const placed = await orderService.placeOrder({
     buyer,
     gigId: gig._id,
-    packageId: "basic",
+    packageId: basicPackageId,
     extraIds: [],
     projectDescription: "I need a modern landing page for my startup.",
     requirements: [],
@@ -107,7 +108,7 @@ it("full order lifecycle: place → pay → requirements → deliver → revise 
   const again = await orderService.placeOrder({
     buyer,
     gigId: gig._id,
-    packageId: "basic",
+    packageId: basicPackageId,
     extraIds: [],
     projectDescription: "I need a modern landing page for my startup.",
     requirements: [],
@@ -126,7 +127,7 @@ it("full order lifecycle: place → pay → requirements → deliver → revise 
   });
   const confirmed = await paymentService.autoConfirm(payment, order);
   assert.equal(confirmed.order.status, "IN_PROGRESS");
-  assert.equal(confirmed.order.payment.status, "CONFIRMED");
+  assert.equal(confirmed.order.payment.status, "confirmed");
 
   const active = await Order.findById(order._id);
   assert.equal(active.status, "IN_PROGRESS");
