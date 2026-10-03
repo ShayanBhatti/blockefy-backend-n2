@@ -1,16 +1,17 @@
 const asyncHandler = require("../utils/asyncHandler");
 const escrowService = require("../services/escrow.service");
-const { getOwnedProject } = require("../services/project.service");
+const { getOwnedProject, assertProjectParticipant } = require("../services/project.service");
 const Milestone = require("../models/Milestone");
 
 const getState = asyncHandler(async (req, res) => {
+  // Escrow balances are only visible to the project's participants.
+  await assertProjectParticipant({ projectId: req.params.projectId, user: req.authUser });
   const result = await escrowService.getEscrowState({ projectId: req.params.projectId });
   res.json({ success: true, data: result });
 });
 
 const createDeposit = asyncHandler(async (req, res) => {
-  const project = await getOwnedProject({ projectId: req.params.projectId, user: req.authUser });
-  const result = await escrowService.createDeposit({
+  const project = await getOwnedProject({ projectId: req.params.projectId, user: req.authUser });  const result = await escrowService.createDeposit({
     project,
     user: req.authUser,
     milestoneId: req.body.milestoneId,
@@ -36,7 +37,10 @@ const confirmDeposit = asyncHandler(async (req, res) => {
  * job reuses the same service call.
  */
 const release = asyncHandler(async (req, res) => {
-  const project = await getOwnedProject({ projectId: req.params.projectId, user: req.authUser });
+  // Only the project's client or freelancer may trigger a release. The contract
+  // additionally requires the milestone to be approved OR past its review
+  // window, so an early attempt reverts on-chain instead of paying out.
+  const project = await assertProjectParticipant({ projectId: req.params.projectId, user: req.authUser });
   const milestone = await Milestone.findOne({ projectId: project._id, status: "submitted" })
     .sort({ createdAt: 1 })
     .populate("projectId")
@@ -63,7 +67,6 @@ const openDispute = asyncHandler(async (req, res) => {
   const project = await getOwnedProject({ projectId: req.params.projectId, user: req.authUser });
   const result = await escrowService.openDispute({
     project,
-    adminKey: req.body.adminKey || null,
     reason: req.body.reason,
   });
   res.json({ success: true, data: result });
@@ -73,7 +76,6 @@ const resolveDispute = asyncHandler(async (req, res) => {
   const project = await getOwnedProject({ projectId: req.params.projectId, user: req.authUser });
   const result = await escrowService.resolveDispute({
     project,
-    adminKey: req.body.adminKey || null,
     toFreelancer: req.body.toFreelancer,
   });
   res.json({ success: true, data: result });

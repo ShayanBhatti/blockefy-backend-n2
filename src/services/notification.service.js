@@ -1,4 +1,5 @@
 const Notification = require("../models/Notification");
+const User = require("../models/User");
 
 /**
  * Notification service.
@@ -163,6 +164,41 @@ const notify = {
 };
 
 const notifyProject = {
+  /**
+   * Broadcast a newly published project to freelancers whose seller skills
+   * overlap the project skills (or all active freelancers when the project has
+   * no skills). Best-effort and bounded so a publish never blocks on fan-out.
+   */
+  projectPosted: (project, { skills = [], buyerName = "A client" } = {}) =>
+    (async () => {
+      const wanted = skills.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
+      const query = {
+        role: "seller",
+        isSuspended: { $ne: true },
+        ...(wanted.length
+          ? { "sellerProfile.skills": { $in: wanted.map((s) => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i")) } }
+          : {}),
+      };
+      const sellers = await User.find(query)
+        .select("_id")
+        .limit(200)
+        .lean();
+      const buyerLabel = String(buyerName || "A client").trim();
+      const budget = `${Number(project.budget?.max || 0)} ETH`;
+      const results = await Promise.all(
+        sellers.map((s) =>
+          createNotification({
+            userId: s._id,
+            type: "project_posted",
+            title: "New project matches your skills",
+            message: `${buyerLabel} posted "${project.title}" (${budget}). Submit a proposal to get hired.`,
+            actionUrl: projectActionUrl(project._id),
+            relatedEntity: projectRelatedEntity(project._id),
+          })
+        )
+      );
+      return results.filter(Boolean).length;
+    })(),
   proposalReceived: (buyerId, projectId, sellerName) =>
     createNotification({
       userId: buyerId,

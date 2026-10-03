@@ -22,6 +22,13 @@ router.post(
   projectController.confirmOnChainProject
 );
 
+// POST /api/projects/:projectId/publish - publish a saved draft to freelancers
+router.post(
+  "/projects/:projectId/publish",
+  validateObjectId("projectId"),
+  projectController.publishProject
+);
+
 // PUT /api/projects/:projectId - update open/draft project details
 router.put(
   "/projects/:projectId",

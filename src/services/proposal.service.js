@@ -4,6 +4,7 @@ const Proposal = require("../models/Proposal");
 const Milestone = require("../models/Milestone");
 const AppError = require("../utils/AppError");
 const chainService = require("./chain.service");
+const walletActor = require("./walletActor.service");
 const { notifyProject } = require("./notification.service");
 const { getOwnedProject, assertRole } = require("./project.service");
 
@@ -160,28 +161,36 @@ const acceptProposal = async ({ user, proposalId }) => {
   }
 
   const seller = await mongoose.model("User").findById(proposal.sellerId._id || proposal.sellerId);
-  if (!seller?.walletAddress && !seller?.walletPrivateKey) {
+  const sellerActor = await walletActor.describeActorFor({ user: seller, project });
+  const freelancerAddress = sellerActor.address || seller?.authProviders?.wallet?.walletAddress || null;
+  if (!freelancerAddress) {
     throw new AppError("The freelancer has no connected wallet", 422, "NO_WALLET");
   }
-  const freelancerAddress = seller.walletAddress || seller.authProviders?.wallet?.walletAddress;
 
   let txHash = null;
-  if (project.onChainProjectId && user.walletPrivateKey) {
-    if (!freelancerAddress) {
-      throw new AppError("Freelancer wallet address is required", 422, "NO_WALLET");
-    }
+  if (project.onChainProjectId) {
+    // `approveProject` is `onlyClient`, and it records `freelancerAddress` as the
+    // on-chain freelancer - so that address must be the one the seller will
+    // actually be able to sign with (their imported external wallet if they have
+    // one), otherwise they could never claim a milestone.
+    const { actorKey: buyerKey } = await walletActor.requireActorKey({
+      user,
+      project,
+      party: "client",
+      label: "You",
+    });
     const { txHash: hash } = await chainService.relayCallAs({
-      actorKey: user.walletPrivateKey,
+      actorKey: buyerKey,
       method: "approveProject",
       args: [project.onChainProjectId, freelancerAddress],
+      context: {
+        userId: user._id,
+        projectId: project._id,
+        proposalId: proposal._id,
+        description: "Hired a freelancer and opened escrow",
+      },
     });
     txHash = hash;
-  } else if (project.onChainProjectId) {
-    throw new AppError(
-      "Your wallet is not connected to the backend. Complete project creation first.",
-      422,
-      "WALLET_REQUIRED"
-    );
   }
 
   proposal.status = "accepted";
@@ -199,22 +208,34 @@ const acceptProposal = async ({ user, proposalId }) => {
   // so the client can deposit right away (contract requires the milestone to
   // exist before the first deposit flips the project to InProgress).
   let fixClaimMilestone = null;
-  if (project.onChainProjectType === "fixclaim" && project.onChainProjectId && seller.walletPrivateKey) {
+  if (project.onChainProjectType === "fixclaim" && project.onChainProjectId) {
+    const sellerKey = await walletActor.resolveActorKey({
+      user: seller,
+      project,
+      party: "freelancer",
+      label: "the freelancer",
+    });
     const existing = await Milestone.exists({
       projectId: project._id,
       sellerId: seller._id,
       deliveryType: "project",
     });
-    if (!existing) {
-      const { receipt } = await chainService.relayCallAs({
-        actorKey: seller.walletPrivateKey,
-        method: "createMilestone",
-        args: [
-          project.onChainProjectId,
-          "Deliverable",
-          chainService.toWei(proposal.bidAmount),
-        ],
-      });
+    if (!existing && sellerKey.actorKey) {
+const { receipt } = await chainService.relayCallAs({
+          actorKey: sellerKey.actorKey,
+          method: "createMilestone",
+          args: [
+            project.onChainProjectId,
+            "Deliverable",
+            chainService.toWei(proposal.bidAmount),
+          ],
+          context: {
+            userId: seller._id,
+            projectId: project._id,
+            proposalId: proposal._id,
+            description: "Opened the fix-claim deliverable milestone",
+          },
+        });
       const created = chainService.parseEventFromReceipt(receipt, "MilestoneCreated");
       const onChainMilestoneId = created
         ? Number(created.args.milestoneId)

@@ -133,28 +133,17 @@ test(
     assert.equal(milestone.status, "pending");
     assert.ok(Number.isInteger(milestone.onChainMilestoneId) && milestone.onChainMilestoneId >= 0, "milestone should carry an on-chain id");
 
-    // 5. Buyer funds escrow for the milestone (client-signed deposit).
+    // 5. Buyer funds escrow for the milestone. createDeposit now RELAYS the
+    //    deposit itself (onlyClient on-chain) and returns the completed rows,
+    //    so there is no client-signed payload to send or confirm any more.
     const deposit = await escrowService.createDeposit({
       project,
       user: buyer,
       milestoneId: milestone._id,
     });
-    const wallet = new ethers.Wallet(BUYER_KEY, chainService.getProvider());
-    const tx = await wallet.sendTransaction({
-      to: deposit.payload.to,
-      value: BigInt(deposit.payload.value),
-      data: deposit.payload.data,
-    });
-    const receipt = await tx.wait();
-    assert.equal(Number(receipt.status), 1, "deposit tx must succeed");
-
-    const confirmed = await escrowService.confirmDeposit({
-      project,
-      user: buyer,
-      milestoneId: milestone._id,
-      txHash: tx.hash,
-    });
-    milestone = confirmed.milestone;
+    milestone = deposit.milestone;
+    assert.ok(deposit.transaction && deposit.transaction.txHash, "deposit must record a tx hash");
+    assert.equal(deposit.transaction.status, "completed");
     assert.equal(milestone.paymentStatus, "paid");
     assert.equal(milestone.status, "funded");
 
@@ -254,5 +243,100 @@ test(
       (err) => err.statusCode === 403 && err.code === "FORBIDDEN",
       "draft (non-open) projects must stay participant-only"
     );
+  }
+);
+
+/**
+ * Regression: `requestChanges` clears `isCompleted` on-chain, and
+ * `approveDeliverable` requires it to be true. If `resubmitMilestone` updates
+ * only Mongo, the milestone can never be approved or released again and the
+ * whole rework path deadlocks. This asserts the chain state directly so the
+ * off-chain-only regression cannot come back unnoticed.
+ */
+test(
+  "rework: requestChanges -> resubmit -> approve -> release keeps the chain and Mongo in step",
+  { skip },
+  async (t) => {
+    if (!(await chainService.isChainAvailable())) {
+      t.skip("Hardhat chain is not available");
+      return;
+    }
+
+    const created = await projectService.createProject({
+      user: buyer,
+      body: {
+        title: "Rework regression",
+        description: "Exercises the revision loop end to end",
+        category: "web-development",
+        projectType: "hourly",
+        onChainProjectType: "milestones",
+        budget: { min: 1, max: 1, currency: "ETH" },
+        duration: "1 month",
+        visibility: "public",
+      },
+    });
+    const p = created.project;
+
+    const applied = await proposalService.createProposal({
+      user: seller,
+      projectId: p._id,
+      body: {
+        coverLetter: "Rework specialist",
+        bidAmount: 1,
+        estimatedDuration: "1 week",
+        termsAccepted: true,
+      },
+    });
+    const accepted = await proposalService.acceptProposal({ user: buyer, proposalId: applied.proposal._id });
+    const proj = accepted.project;
+
+    const ms = await milestoneService.createMilestone({
+      user: seller,
+      projectId: proj._id,
+      body: { title: "Reworkable phase", description: "Phase 1", amount: 1 },
+    });
+    let m = ms.milestone;
+
+    await escrowService.createDeposit({ project: proj, user: buyer, milestoneId: m._id });
+    await milestoneService.submitMilestone({
+      milestoneId: m._id,
+      user: seller,
+      data: { url: "https://example.com/v1", description: "first pass" },
+    });
+
+    const onChainId = proj.onChainProjectId;
+    const msId = m.onChainMilestoneId;
+    assert.equal((await chainService.getMilestone(msId)).isCompleted, true, "submission marks the milestone complete on-chain");
+
+    // Buyer asks for changes: the contract re-opens the milestone.
+    await milestoneService.requestRevision({
+      milestoneId: m._id,
+      user: buyer,
+      reason: "Please revise",
+      extraDays: 3,
+    });
+    m = (await milestoneService.getMilestoneById({ milestoneId: m._id })).milestone;
+    assert.equal(m.status, "revision_requested");
+    assert.equal((await chainService.getMilestone(msId)).isCompleted, false, "requestChanges must clear isCompleted on-chain");
+
+    // Resubmission MUST restore isCompleted on-chain, otherwise approval is impossible.
+    await milestoneService.resubmitMilestone({
+      milestoneId: m._id,
+      user: seller,
+      data: { url: "https://example.com/v2", description: "second pass" },
+    });
+    m = (await milestoneService.getMilestoneById({ milestoneId: m._id })).milestone;
+    assert.equal(m.status, "submitted");
+    assert.equal(
+      (await chainService.getMilestone(msId)).isCompleted,
+      true,
+      "resubmitMilestone must re-complete the milestone on-chain"
+    );
+
+    // Only now can the buyer approve and release.
+    const released = await milestoneService.approveMilestone({ milestoneId: m._id, user: buyer });
+    assert.equal(released.milestone.paymentStatus, "released");
+    assert.equal((await chainService.getMilestone(msId)).isClaimed, true, "milestone must be claimable after rework");
+    assert.equal((await chainService.getProjectEscrow(onChainId)), 0n, "escrow must drain after release");
   }
 );

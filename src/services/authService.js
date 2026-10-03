@@ -1,18 +1,113 @@
-/**
+﻿ /**
  * Centralized Authentication Service
  * Handles unified provider linking logic
  * Prevents duplicate accounts when same email exists across different providers
- * 
+ *
  * Responsibilities:
  * - Find or create users by email
  * - Link authentication providers
  * - Update provider metadata
  * - Validate provider information
  * - Generate unified response structure
+ *
+ * Wallet rule: a wallet signup keeps the address it signed for in
+ * `walletAddress`. Only email / Google / GitHub signups are issued a custodial
+ * wallet, because only those arrive without an address of their own.
  */
 
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
+const { ethers } = require("ethers");
+
+/**
+ * Give an account that signed up WITHOUT a wallet one the backend can sign with.
+ *
+ * Only for email / Google / GitHub signups. Those users arrive with no address of
+ * their own, and the contract gates every relayed call on the CALLER
+ * (onlyClient / onlyFreelancer), so the backend has to hold a key for them.
+ *
+ * Must never run for a wallet signup: that user brought their own address and
+ * minting a second one would publish their projects from an address they do not
+ * control. See useConnectedWallet.
+ *
+ * @param {Object} user mongoose user document
+ * @returns {{ address: string|null, changed: boolean }}
+ */
+const ensureCustodialWallet = (user) => {
+  const address = user.walletAddress ? String(user.walletAddress) : null;
+  const key = user.walletPrivateKey ? String(user.walletPrivateKey) : null;
+
+  // Connected with MetaMask: the user owns this address, so leave it alone.
+  if (user.walletMode === "external") return { address, changed: false };
+
+  let derived = null;
+  if (key) {
+    try {
+      derived = new ethers.Wallet(key).address;
+    } catch (_) {
+      derived = null; // unusable key, mint a replacement below
+    }
+  }
+
+  if (derived && address && derived.toLowerCase() === address.toLowerCase()) {
+    if (!user.walletMode) {
+      user.walletMode = "custodial";
+      return { address, changed: true };
+    }
+    return { address, changed: false };
+  }
+
+  const wallet = ethers.Wallet.createRandom();
+  user.walletAddress = wallet.address;
+  user.walletPrivateKey = wallet.privateKey;
+  user.walletMode = "custodial";
+  return { address: wallet.address, changed: true };
+};
+
+/**
+ * Adopt the address a user connected, ONLY if they do not already own a wallet.
+ *
+ * An account created from email / Google / GitHub is issued a custodial wallet by
+ * the backend, and that address stays theirs for good: connecting a browser
+ * wallet records the identity link but never replaces `walletAddress`. Swapping
+ * it would leave `walletPrivateKey` pointing at an address the user no longer
+ * uses, which makes every relay fail.
+ *
+ * A wallet-primary signup (no wallet yet) adopts the connected address as-is.
+ *
+ * @param {Object} user mongoose user document
+ * @returns {{ address: string|null, changed: boolean }}
+ */
+const useConnectedWallet = (user, walletAddress) => {
+  const next = walletAddress ? String(walletAddress).toLowerCase() : null;
+  if (!next) return { address: user.walletAddress || null, changed: false };
+
+  const hasStoredKey = Boolean(user.walletPrivateKey) || Boolean(user.externalWallet?.privateKey);
+  if (user.walletAddress && hasStoredKey) {
+    // Already owns a wallet (custodial pair, or a wallet they imported a key
+    // for). Keep it - the connected address is an identity link only.
+    return { address: user.walletAddress, changed: false };
+  }
+
+  const current = user.walletAddress ? String(user.walletAddress).toLowerCase() : null;
+  if (current === next) return { address: current, changed: false };
+
+  user.walletAddress = next;
+  user.walletMode = "external";
+  return { address: next, changed: true };
+};
+
+/**
+ * True when the backend can relay on-chain actions for this user.
+ */
+const canRelayOnChain = (user) => {
+  try {
+    const derived = new ethers.Wallet(String(user?.walletPrivateKey || "")).address;
+    return Boolean(user?.walletAddress) && derived.toLowerCase() === String(user.walletAddress).toLowerCase();
+  } catch (_) {
+    return false;
+  }
+};
 
 /**
  * Log authentication events (without sensitive data)
@@ -112,6 +207,14 @@ const handleProviderLogin = async (providerData) => {
       user = await User.findOne({ email: normalizedEmail });
     }
 
+    // A wallet login often has no email. Without this, every reconnect would
+    // create a brand new account for the same person.
+    if (!user && provider === "wallet" && walletAddress) {
+      user = await User.findOne({
+        "authProviders.wallet.walletAddress": String(walletAddress).toLowerCase(),
+      });
+    }
+
     const isNewUser = !user;
 
     // Step 2a: User exists - check provider linking
@@ -126,6 +229,17 @@ const handleProviderLogin = async (providerData) => {
           email: user.email,
           provider,
         });
+
+        // Repair accounts that predate custodial wallet provisioning, so a
+        // returning Google/GitHub user can start a project right away. A wallet
+        // login keeps the address it came in with and never mints one.
+        if (provider !== "wallet" && ensureCustodialWallet(user).changed) {
+          await user.save();
+          logAuthEvent("Custodial wallet provisioned on repeat login", {
+            userId: user._id,
+            provider,
+          });
+        }
 
         return {
           user,
@@ -158,8 +272,16 @@ const handleProviderLogin = async (providerData) => {
           user.githubId = githubId; // Backward compat
         }
         if (provider === "wallet" && walletAddress) {
-          user.authProviders.wallet.walletAddress = walletAddress.toLowerCase();
-          user.walletAddress = walletAddress.toLowerCase(); // Backward compat
+          // The connected address IS the user's wallet, so it becomes
+          // user.walletAddress. Any custodial address this account was issued
+          // earlier is dropped in favour of the one the user controls.
+          useConnectedWallet(user, walletAddress);
+          user.authProviders.wallet = {
+            ...(user.authProviders.wallet || {}),
+            connected: true,
+            walletAddress: walletAddress.toLowerCase(),
+            connectedAt: new Date(),
+          };
         }
 
         // Update legacy authProvider field for backward compatibility
@@ -170,12 +292,22 @@ const handleProviderLogin = async (providerData) => {
           user.emailVerified = true;
         }
 
-        // Update user info if not set
-        if (fullName && !user.fullName) {
-          user.fullName = fullName;
-        }
+// Update user info if not set
+      if (fullName && !user.fullName) {
+        user.fullName = fullName;
+      }
 
-        await user.save();
+      // A Google/GitHub login still needs a custodial key pair for the relay. A
+      // wallet login already stored its own address above, so minting here
+      // would replace the wallet the user actually controls.
+      if (provider !== "wallet" && ensureCustodialWallet(user).changed) {
+        logAuthEvent("Custodial wallet provisioned for existing account", {
+          userId: user._id,
+          provider,
+        });
+      }
+
+      await user.save();
 
         logAuthEvent(`${provider.toUpperCase()} linked successfully`, {
           userId: user._id,
@@ -206,9 +338,12 @@ const handleProviderLogin = async (providerData) => {
       generatedUsername = `wallet_${walletAddress.slice(-6)}_${Date.now()}`;
     }
 
-    // Create new user
+    // Create new user. A wallet login may have no email, and `email` carries a
+    // sparse unique index. Sparse skips documents where the field is ABSENT, not
+    // where it is null, so storing an explicit null would make the second
+    // wallet-only signup fail with E11000. Leave the field out instead.
     user = new User({
-      email: normalizedEmail,
+      ...(normalizedEmail ? { email: normalizedEmail } : {}),
       fullName: fullName || "User",
       username: generatedUsername?.toLowerCase(),
       role: "buyer",
@@ -242,10 +377,18 @@ const handleProviderLogin = async (providerData) => {
       user.authProviders.github.connectedAt = new Date();
       user.githubId = githubId; // Backward compat
     } else if (provider === "wallet") {
+      // Wallet signup: the connected address becomes user.walletAddress as-is.
+      // Nothing is generated - this is the address the user already controls.
+      useConnectedWallet(user, walletAddress);
       user.authProviders.wallet.connected = true;
       user.authProviders.wallet.walletAddress = walletAddress.toLowerCase();
       user.authProviders.wallet.connectedAt = new Date();
-      user.walletAddress = walletAddress.toLowerCase(); // Backward compat
+    }
+
+    // Email, Google and GitHub signups arrive with no wallet of their own, so
+    // the backend issues them a custodial pair it can relay with.
+    if (provider !== "wallet") {
+      ensureCustodialWallet(user);
     }
 
     // Update legacy authProvider field for backward compatibility
@@ -399,10 +542,16 @@ const buildUserResponse = (user, includeProviders = true) => {
     fullName: user.fullName,
     username: user.username,
     role: user.role,
-    walletAddress: user.walletAddress || null,
-    onboardingStep: user.onboardingStep,
-    onboardingCompleted: user.onboardingCompleted,
-    emailVerified: user.emailVerified,
+walletAddress: user.walletAddress || null,
+   onboardingStep: user.onboardingStep,
+   onboardingCompleted: user.onboardingCompleted,
+   emailVerified: user.emailVerified,
+   // Lets the UI tell "no wallet linked yet" apart from "the backend cannot
+   // relay yet". Everything on-chain is relayed by us, so this being true is
+   // all the user needs - no wallet popup is required to start a project.
+   canRelayOnChain: canRelayOnChain(user),
+   walletMode: user.walletMode || (user.walletAddress ? "custodial" : null),
+   linkedWalletAddress: user.authProviders?.wallet?.walletAddress || null,
   };
 
   if (includeProviders) {
@@ -423,5 +572,8 @@ module.exports = {
   buildUserResponse,
   getPrimaryProvider,
   getProviderStatus,
+ensureCustodialWallet,
+useConnectedWallet,
+canRelayOnChain,
   logAuthEvent,
 };

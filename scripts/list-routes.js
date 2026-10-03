@@ -1,66 +1,55 @@
 /**
- * Dev tool: list all registered routes without connecting to the database.
+ * Dev tool: list every registered Express route as `METHOD <full path>`.
+ *
  *   node scripts/list-routes.js
+ *
+ * Walks the router stack recursively, accumulating each mount prefix. The
+ * previous version mixed two different traversal styles and printed phantom
+ * concatenated paths such as `/contract/status/contract/status`, which looked
+ * like a double-mounted router but was purely a bug in this script.
  */
 process.env.NODE_ENV = "test";
 const app = require("../index");
 
-const routes = [];
-const stack = app.router && app.router.stack;
+const rows = [];
 
-const walk = (layer, base) => {
-  if (!layer) return;
-  if (layer.route) {
-    const methods = Object.keys(layer.route.methods).join(",").toUpperCase();
-    routes.push(`${methods.padEnd(6)} ${base + layer.route.path}`);
-  } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
-    const prefix = layer.regexp ? base : base;
-    layer.handle.stack.forEach((child) => {
-      const childPath = child.route ? child.route.path : "";
-      const full = prefix + (child.route ? "" : "") + (layer.handle.path || "");
-      walk(child, prefix + (child.route ? child.route.path : ""));
-    });
-    layer.handle.stack.forEach((child) => {
-      if (!child.route && child.handle && child.handle.stack) {
-        child.handle.stack.forEach((sub) => {
-          if (sub.route) {
-            const methods = Object.keys(sub.route.methods).join(",").toUpperCase();
-            routes.push(`${methods.padEnd(6)} ${full || ""}${sub.route.path}`);
-          }
-        });
+/** Recursively collect `METHOD path` for every route under `prefix`. */
+function walk(stack, prefix) {
+  if (!Array.isArray(stack)) return;
+  for (const layer of stack) {
+    if (layer.route) {
+      const path = prefix + layer.route.path;
+      for (const method of Object.keys(layer.route.methods || {})) {
+        rows.push(`${method.toUpperCase().padEnd(7)}${path}`);
       }
-    });
+      continue;
+    }
+    // Mounted middleware/router: `layer.regexp` encodes the mount path.
+    if (layer.name === "router" && layer.handle && layer.handle.stack) {
+      const mountPath = decodeMountPath(layer.regexp && layer.regexp.source);
+      walk(layer.handle.stack, prefix + mountPath);
+    }
   }
-};
-
-if (stack) {
-  stack.forEach((layer) => {
-    if (layer.name === "query" || layer.name === "expressInit") return;
-    walk(layer, "");
-  });
 }
 
-// Also print router-level mounts from the app's route list.
-const list = app.router ? app.router.stack : [];
-list.forEach((layer) => {
-  if (layer.route) {
-    const methods = Object.keys(layer.route.methods).join(",").toUpperCase();
-    routes.push(`${methods.padEnd(6)} ${layer.route.path}`);
-  }
-});
+/** Turns an Express layer regexp back into its mount path, e.g. /^\/api\/?/. */
+function decodeMountPath(source) {
+  if (!source) return "";
+  if (source === "^\\/?(?=\\/|$)") return "/";
+  const m = source.match(/^\^\\\/?((?:[\w\-\/]|\\\/)*)\\\/\?\(\?=\\\/\|\$\)$/);
+  if (!m) return "";
+  return "/" + m[1].replace(/\\\//g, "/").replace(/\/$/, "");
+}
 
-// Simpler approach: print mounted routers with their paths.
-list.forEach((layer) => {
-  if (layer.name === "router") {
-    const path = layer.regexp && layer.regexp.source ? layer.regexp.source : "?";
-    const inner = layer.handle.stack
-      .filter((l) => l.route)
-      .map((l) => `${Object.keys(l.route.methods).join(",").toUpperCase()} ${l.route.path}`);
-    routes.push(`[mount] ${path}`);
-    inner.forEach((r) => routes.push(`        ${r}`));
-  }
-});
+walk(app.router && app.router.stack, "");
 
-console.log("Registered routes:");
-[...new Set(routes)].forEach((r) => console.log(r));
-console.log("Total entries:", routes.length);
+rows.sort((a, b) => a.slice(8).localeCompare(b.slice(8)) || a.localeCompare(b));
+console.log("Registered routes:\n");
+for (const r of rows) console.log("  " + r);
+console.log(`\nTotal: ${rows.length}`);
+
+const chainRoutes = rows.filter((r) => /\/contract|\/escrow|onchain/i.test(r));
+if (chainRoutes.length) {
+  console.log("\nBlockchain routes:\n");
+  for (const r of chainRoutes) console.log("  " + r);
+}

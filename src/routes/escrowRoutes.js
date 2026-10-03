@@ -37,6 +37,8 @@ router.post(
 );
 
 // POST /api/escrow/projects/:projectId/release - trigger time-based release
+// Either party may trigger it once the review window lapsed; the controller
+// enforces that the caller is a participant of this project.
 router.post(
   "/escrow/projects/:projectId/release",
   validateObjectId("projectId"),

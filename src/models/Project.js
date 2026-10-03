@@ -80,8 +80,12 @@ const projectSchema = new mongoose.Schema({
   // Visibility
   status: {
     type: String,
-    enum: ["draft", "open", "in_progress", "completed", "cancelled", "paused"],
+    enum: ["draft", "open", "in_progress", "completed", "cancelled", "paused", "disputed"],
     default: "draft",
+  },
+  publishedAt: {
+    type: Date,
+    default: null,
   },
   visibility: {
     type: String,

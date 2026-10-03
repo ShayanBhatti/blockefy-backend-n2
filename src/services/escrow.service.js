@@ -5,6 +5,7 @@ const Transaction = require("../models/Transaction");
 const User = require("../models/User");
 const AppError = require("../utils/AppError");
 const chainService = require("./chain.service");
+const walletActor = require("./walletActor.service");
 const { notifyProject } = require("./notification.service");
 
 /**
@@ -30,18 +31,42 @@ const getTransactionsCount = () => Transaction.countDocuments();
  * key first, then the affected seller's, then the buyer's, then the admin's.
  */
 const resolveRelayKey = async ({ actorKey, milestone, project }) => {
-  if (actorKey) return actorKey;
-  const ids = [];
-  if (milestone?.sellerId?._id) ids.push(milestone.sellerId._id);
-  if (milestone?.buyerId?._id) ids.push(milestone.buyerId._id);
-  if (project?.buyerId) ids.push(project.buyerId);
-  for (const id of ids) {
-    const u = await User.findById(id).lean();
-    if (u?.walletPrivateKey) return u.walletPrivateKey;
+  if (actorKey) return { key: actorKey, userId: null };
+  // `claimMilestone` / `fixClaim` accept ONLY the client or the freelancer
+  // (`msg.sender == project.client || msg.sender == project.freelancer`). An admin
+  // key is NOT a valid actor here, so falling back to one would always revert.
+  // Try the two parties, in order, and verify each key actually controls that
+  // party's wallet before signing as them.
+  const candidates = [];
+  const sellerId = milestone?.sellerId?._id || milestone?.sellerId;
+  if (sellerId) candidates.push({ id: sellerId, label: "the freelancer", party: "freelancer" });
+  const buyerId = milestone?.buyerId?._id || milestone?.buyerId || project?.buyerId?._id || project?.buyerId;
+  if (buyerId) candidates.push({ id: buyerId, label: "the client", party: "client" });
+
+  for (const { id, label, party } of candidates) {
+    // Projection order matters - see the note at the top of wallet.service.js:
+    // plain fields first, then `+` paths last, and never list a parent path
+    // together with its child (Mongo 31249 path collision).
+    const u = await User.findById(id)
+      .select("walletAddress walletMode walletPrivateKey externalWallet.address +externalWallet.privateKey")
+      .lean();
+    if (!u) continue;
+
+    // Whichever of the party's keys controls the wallet the CONTRACT has
+    // recorded for them. `resolveActorKey` reads the on-chain client/freelancer,
+    // so a project published before a key import keeps signing with the
+    // custodial wallet it was created with. The party must match the candidate,
+    // otherwise the freelancer is checked against the client's address and the
+    // lookup always misses.
+    let resolved = null;
+    try {
+      resolved = await walletActor.resolveActorKey({ user: u, project, party, label });
+    } catch (err) {
+      if (err.code === "ACTOR_KEY_UNAVAILABLE") continue; // try the other party
+      throw err;
+    }
+    if (resolved.actorKey) return { key: resolved.actorKey, userId: id };
   }
-  const admin = await User.findOne({ role: "admin" }).lean();
-  const adminKey = admin?.walletPrivateKey || process.env.ADMIN_PRIVATE_KEY;
-  if (adminKey) return adminKey;
   return null;
 };
 
@@ -79,7 +104,9 @@ const getEscrowState = async ({ projectId }) => {
  * the contract emits a matching `FundsDeposited` event.
  */
 const createDeposit = async ({ project, user, milestoneId, amountEth }) => {
-  if (String(project.buyerId) !== String(user._id) && !isAdmin(user)) {
+  // `depositFunds` is `onlyClient` on-chain, so the buyer is the ONLY actor who
+  // can fund escrow. An admin override is impossible here: it would revert.
+  if (String(project.buyerId) !== String(user._id)) {
     throw new AppError("Only the client can deposit into escrow", 403, "FORBIDDEN");
   }
   if (!project.onChainProjectId) {
@@ -104,20 +131,27 @@ const createDeposit = async ({ project, user, milestoneId, amountEth }) => {
     );
   }
 
-  const key = user.walletPrivateKey || (await resolveRelayKey({ project }));
-  if (!key) {
-    throw new AppError(
-      "No wallet key available to relay the deposit. Link a wallet to your account first.",
-      422,
-      "NO_RELAY"
-    );
-  }
+  // `depositFunds` is `onlyClient` on-chain, so only the buyer's own key can
+  // relay it. Falling back to the seller's/admin key would revert.
+  // Which of the buyer's two keys depends on the project's recorded client.
+  const { actorKey: key } = await walletActor.requireActorKey({
+    user,
+    project,
+    party: "client",
+    label: "You",
+  });
 
   const { txHash, receipt } = await chainService.relayCallAs({
     actorKey: key,
     method: "depositFunds",
     args: [project.onChainProjectId],
     value: chainService.toWei(amount),
+    context: {
+      userId: user?._id || user?.id || null,
+      projectId: project._id,
+      milestoneId: next._id,
+      description: `Deposited funds for milestone ${next.milestoneNumber}`,
+    },
   });
 
   const event = chainService.parseEventFromReceipt(receipt, "FundsDeposited");
@@ -266,15 +300,21 @@ const releaseMilestone = async ({ milestone, actorKey, project }) => {
   const p = project || (await Project.findById(milestone.projectId._id || milestone.projectId));
   if (!p?.onChainProjectId) throw new AppError("Project has no on-chain escrow", 409, "NO_ONCHAIN");
 
-  const key = await resolveRelayKey({ actorKey, milestone, project: p });
-  if (!key) {
+  const relay = await resolveRelayKey({ actorKey, milestone, project: p });
+  if (!relay?.key) {
     throw new AppError("No wallet key available to relay the release", 422, "NO_RELAY");
   }
 
   const { txHash, receipt } = await chainService.relayCallAs({
-    actorKey: key,
+    actorKey: relay.key,
     method: "claimMilestone",
     args: [p.onChainProjectId, milestone.onChainMilestoneId],
+    context: {
+      userId: relay.userId,
+      projectId: p._id,
+      milestoneId: milestone._id,
+      description: `Claimed milestone ${milestone.milestoneNumber}`,
+    },
   });
 
   const claimed = chainService.parseEventFromReceipt(receipt, "MilestoneClaimed");
@@ -342,21 +382,44 @@ const releaseMilestone = async ({ milestone, actorKey, project }) => {
  * (contract enforces `deadline`).
  */
 const refund = async ({ project, user, reason }) => {
-  if (String(project.buyerId) !== String(user._id) && !isAdmin(user)) {
+  // `retrieveFunds` is `onlyClient` on-chain: the buyer is the only actor who can
+  // pull escrow back, so an admin override would simply revert.
+  if (String(project.buyerId) !== String(user._id)) {
     throw new AppError("Only the client can retrieve funds", 403, "FORBIDDEN");
   }
   if (!project.onChainProjectId) {
     throw new AppError("Project has no on-chain escrow", 409, "NO_ONCHAIN");
   }
-  if (!user.walletPrivateKey) {
-    throw new AppError("No wallet key available to relay the refund. Date or milestone constraints may apply.", 422, "NO_RELAY");
-  }
+  // `retrieveFunds` is `onlyClient` on-chain: the buyer must relay it with
+  // their own key, otherwise the refund silently never reaches the chain.
+  const { actorKey: refundKey } = await walletActor.requireActorKey({
+    user,
+    project,
+    party: "client",
+    label: "You",
+  });
 
-  const receipt = await chainService.relayCallAs({
-    actorKey: user.walletPrivateKey,
+  const { receipt } = await chainService.relayCallAs({
+    actorKey: refundKey,
     method: "retrieveFunds",
     args: [project.onChainProjectId],
-  }).then((r) => r.receipt);
+    context: {
+      userId: user._id,
+      projectId: project._id,
+      description: "Retrieved unspent escrow funds",
+    },
+  });
+
+  // The chain is the source of truth for how much actually moved.
+  const refundedEvent = chainService.parseEventFromReceipt(receipt, "FundsRefunded");
+  if (!refundedEvent || Number(refundedEvent.args.projectId) !== project.onChainProjectId) {
+    throw new AppError(
+      "Refund did not emit a matching FundsRefunded event; escrow was not refunded on-chain",
+      422,
+      "TX_NO_EVENT"
+    );
+  }
+  const refundedAmount = etherNum(chainService.toEth(refundedEvent.args.amount));
 
   await Milestone.updateMany(
     { projectId: project._id, paymentStatus: "paid" },
@@ -367,13 +430,14 @@ const refund = async ({ project, user, reason }) => {
     transactionNumber: await Transaction.generateTransactionNumber(),
     userId: project.buyerId,
     type: "escrow_refunded",
-    amount: etherNum(0), // exact amount updated below from chain escrow
+    amount: refundedAmount,
     currency: "ETH",
+    cryptoAmount: refundedAmount,
     cryptoCurrency: "ETH",
     status: "completed",
     projectId: project._id,
     paymentMethod: "wallet",
-    blockchain: `hardhat_${chainService.CHAIN_ID}`,
+    blockchain: `blockefy_${chainService.CHAIN_ID}`,
     isEscrow: true,
     escrowStatus: "refunded",
     txHash: receipt.hash,
@@ -394,17 +458,39 @@ const refund = async ({ project, user, reason }) => {
   return { project, transaction: txn };
 };
 
-/** Admin only: locks a project for dispute resolution. */
-const openDispute = async ({ project, adminKey, reason }) => {
-  if (!project.onChainProjectId) throw new AppError("Project has no on-chain escrow", 409, "NO_ONCHAIN");
-  const key = adminKey || process.env.ADMIN_PRIVATE_KEY || (await resolveRelayKey({ project }));
+/**
+ * Resolves the on-chain admin key: `ADMIN_PRIVATE_KEY` first (the operator's
+ * funded, deployed-account key), then the admin DB account. The key MUST be the
+ * on-chain owner, so it is verified before being used.
+ *
+ * NOTE: `adminKey` is intentionally NOT accepted from callers. A private key
+ * arriving in a request body is an injection vector.
+ */
+const resolveAdminKey = async () => {
+  const admin = await User.findOne({ role: "admin" }).select("walletPrivateKey").lean();
+  const key = process.env.ADMIN_PRIVATE_KEY || admin?.walletPrivateKey;
   if (!key) throw new AppError("No admin wallet key available", 422, "NO_RELAY");
+  await chainService.assertContractOwnerKey(key);
+  return key;
+};
 
-  const receipt = await chainService.relayCallAs({
+/**
+ * Admin (or either party, on-chain) only: locks a project for dispute
+ * resolution. The contract restricts this to the client, freelancer or owner.
+ */
+const openDispute = async ({ project, reason }) => {
+  if (!project.onChainProjectId) throw new AppError("Project has no on-chain escrow", 409, "NO_ONCHAIN");
+  const key = await resolveAdminKey();
+
+  const { receipt } = await chainService.relayCallAs({
     actorKey: key,
     method: "openDispute",
     args: [project.onChainProjectId],
-  }).then((r) => r.receipt);
+    context: {
+      projectId: project._id,
+      description: reason ? `Opened dispute: ${String(reason).slice(0, 160)}` : "Opened dispute",
+    },
+  });
 
   project.status = "disputed";
   project.metadata = { ...(project.metadata || {}), disputeTxHash: receipt.hash, disputeReason: reason || null };
@@ -416,17 +502,22 @@ const openDispute = async ({ project, adminKey, reason }) => {
   return { project };
 };
 
-/** Admin only: final ruling (release to freelancer or refund to client). */
-const resolveDispute = async ({ project, adminKey, toFreelancer }) => {
+/** Admin only (`onlyOwner` on-chain): final ruling. */
+const resolveDispute = async ({ project, toFreelancer }) => {
   if (!project.onChainProjectId) throw new AppError("Project has no on-chain escrow", 409, "NO_ONCHAIN");
-  const key = adminKey || process.env.ADMIN_PRIVATE_KEY || (await resolveRelayKey({ project }));
-  if (!key) throw new AppError("No admin wallet key available", 422, "NO_RELAY");
+  const key = await resolveAdminKey();
 
-  const receipt = await chainService.relayCallAs({
+  const { receipt } = await chainService.relayCallAs({
     actorKey: key,
     method: "resolveDispute",
     args: [project.onChainProjectId, Boolean(toFreelancer)],
-  }).then((r) => r.receipt);
+    context: {
+      projectId: project._id,
+      description: toFreelancer
+        ? "Dispute resolved in favour of the freelancer"
+        : "Dispute resolved in favour of the client",
+    },
+  });
 
   const status = toFreelancer ? "completed" : "cancelled";
   project.status = status;
@@ -457,6 +548,7 @@ module.exports = {
   refund,
   openDispute,
   resolveDispute,
+  resolveAdminKey,
   resolveRelayKey,
   getTransactionsCount,
 };

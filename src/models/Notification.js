@@ -17,6 +17,8 @@ const notificationSchema = new mongoose.Schema({
       "order_completed",
       "order_cancelled",
       "order_late",
+      // Project notifications
+      "project_posted",
       // Proposal notifications
       "proposal_received",
       "proposal_accepted",

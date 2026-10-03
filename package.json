@@ -5,6 +5,12 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:contract": "node --test test/contract.lifecycle.test.js",
+    "compile:contract": "node scripts/compile-contract.js",
+    "verify:remix": "node scripts/verify-remix-build.js",
+    "measure:gas": "node scripts/measure-gas.js",
+    "e2e:live": "node scripts/e2e-live.js",
+    "e2e:services": "node scripts/e2e-services-live.js",
     "serve": "node index.js",
     "dev": "nodemon index.js",
     "live": "concurrently -k -n BACKEND,CLOUDFLARE \"nodemon index.js\" \"cloudflared tunnel --url http://localhost:5000\"",
@@ -40,8 +46,11 @@
   },
   "devDependencies": {
     "@faker-js/faker": "^10.5.0",
+    "@openzeppelin/contracts": "^5.0.2",
     "concurrently": "^10.0.5",
+    "ganache": "^7.9.2",
     "nodemon": "^3.1.14",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "solc": "^0.8.24"
   }
 }

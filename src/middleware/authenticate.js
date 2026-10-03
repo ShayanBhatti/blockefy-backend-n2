@@ -16,7 +16,14 @@ const authenticate = async (req, res, next) => {
     verifyToken(req, res, async (err) => {
       if (err) return next(err);
       try {
-        const user = await User.findById(req.user.userId).lean();
+        // `+externalWallet.privateKey` is required: it is `select: false` on the schema
+// (so it is never serialised into a response), and on-chain relaying needs it.
+// Note: keep this projection `+`-only. Mixing `+`-prefixed fields with plain
+// field names makes Mongoose silently drop ALL of them - see the note in
+// services/wallet.service.js.
+const user = await User.findById(req.user.userId)
+          .select("+walletPrivateKey +externalWallet.privateKey")
+          .lean();
         if (!user) {
           return res.status(401).json({ success: false, message: "User no longer exists", code: "UNAUTHORIZED" });
         }

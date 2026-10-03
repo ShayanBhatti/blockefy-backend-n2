@@ -15,6 +15,14 @@ const confirmOnChainProject = asyncHandler(async (req, res) => {
   res.json({ success: true, data: result });
 });
 
+const publishProject = asyncHandler(async (req, res) => {
+  const result = await projectService.publishProject({
+    user: req.authUser,
+    projectId: req.params.projectId,
+  });
+  res.json({ success: true, data: result });
+});
+
 const listProjects = asyncHandler(async (req, res) => {
   const result = await projectService.listProjects({
     user: req.authUser,
@@ -67,6 +75,7 @@ const cancelProject = asyncHandler(async (req, res) => {
 
 module.exports = {
   createProject,
+  publishProject,
   confirmOnChainProject,
   listProjects,
   getProject,

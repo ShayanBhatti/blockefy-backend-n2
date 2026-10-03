@@ -1,7 +1,7 @@
 const config = require("../config/orderConfig");
 const orderService = require("../services/order.service");
 const { markExpiredMissedCalls } = require("./call.job");
-const { flagLapsedReviews, flagStaleProjects } = require("./project.job");
+const { flagLapsedReviews, flagStaleProjects, autoReleaseLapsedMilestones } = require("./project.job");
 
 /**
  * Background jobs for the order system.
@@ -44,6 +44,11 @@ const projectLapsedReviews = () =>
 const projectStale = () =>
   runSafe("project-stale", flagStaleProjects);
 
+// Moves money, so it is opt-in via AUTO_RELEASE_ESCROW and runs on a slower
+// cadence than the notification jobs.
+const autoReleaseEscrow = () =>
+  runSafe("auto-release-escrow", autoReleaseLapsedMilestones);
+
 /**
  * Start the in-process scheduler.
  */
@@ -55,17 +60,20 @@ const startScheduler = () => {
   const RECONCILE_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
   const CALL_MISSED_INTERVAL_MS = 10 * 1000; // every 10 seconds
   const PROJECT_JOB_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
+  const AUTO_RELEASE_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
 
   const autoCompleteTimer = setInterval(autoCompleteOrders, REVIEW_INTERVAL_MS);
   const reconcileTimer = setInterval(reconcilePayments, RECONCILE_INTERVAL_MS);
   const callMissedTimer = setInterval(markMissedCalls, CALL_MISSED_INTERVAL_MS);
   const lapsedTimer = setInterval(projectLapsedReviews, PROJECT_JOB_INTERVAL_MS);
   const staleTimer = setInterval(projectStale, PROJECT_JOB_INTERVAL_MS);
+  const autoReleaseTimer = setInterval(autoReleaseEscrow, AUTO_RELEASE_INTERVAL_MS);
   if (autoCompleteTimer.unref) autoCompleteTimer.unref();
   if (reconcileTimer.unref) reconcileTimer.unref();
   if (callMissedTimer.unref) callMissedTimer.unref();
   if (lapsedTimer.unref) lapsedTimer.unref();
   if (staleTimer.unref) staleTimer.unref();
+  if (autoReleaseTimer.unref) autoReleaseTimer.unref();
 
   // Kick off once shortly after boot.
   const bootTimer = setTimeout(() => {
@@ -74,6 +82,7 @@ const startScheduler = () => {
     markMissedCalls();
     projectLapsedReviews();
     projectStale();
+    autoReleaseEscrow();
   }, 5000);
   if (bootTimer.unref) bootTimer.unref();
 
@@ -89,6 +98,16 @@ const runOnce = async () => {
   await markMissedCalls();
   await projectLapsedReviews();
   await projectStale();
+  await autoReleaseEscrow();
 };
 
-module.exports = { startScheduler, runOnce, autoCompleteOrders, reconcilePayments, markMissedCalls, projectLapsedReviews, projectStale };
+module.exports = {
+  startScheduler,
+  runOnce,
+  autoCompleteOrders,
+  reconcilePayments,
+  markMissedCalls,
+  projectLapsedReviews,
+  projectStale,
+  autoReleaseEscrow,
+};

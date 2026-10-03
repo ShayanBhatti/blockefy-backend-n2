@@ -21,6 +21,7 @@ const projectRoutes = require("./src/routes/projectRoutes");
 const proposalRoutes = require("./src/routes/proposalRoutes");
 const milestoneRoutes = require("./src/routes/milestoneRoutes");
 const escrowRoutes = require("./src/routes/escrowRoutes");
+const walletRoutes = require("./src/routes/walletRoutes");
 const realtimeService = require("./src/services/realtime.service");
 const errorHandler = require("./src/middleware/errorHandler");
 const { createRateLimiter } = require("./src/middleware/rateLimiter");
@@ -102,6 +103,7 @@ app.use("/api", projectRoutes);
 app.use("/api", proposalRoutes);
 app.use("/api", milestoneRoutes);
 app.use("/api", escrowRoutes);
+app.use("/api", walletRoutes);
 
 // 404 for unknown API routes
 app.use("/api", (req, res) => {

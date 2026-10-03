@@ -201,6 +201,7 @@ const register = async (req, res) => {
       username: normalizedUsername,
       walletAddress: wallet.address,
       walletPrivateKey: wallet.privateKey,
+      walletMode: "custodial",
       onboardingStep: 0,
       onboardingCompleted: false,
       role: "buyer",
@@ -546,34 +547,31 @@ const verifyWalletSignature = async (req, res) => {
     }
 
     // ============================================================================
-    // STEP 3: Link wallet provider (if not already linked)
+    // STEP 3: Store the connected wallet
     // ============================================================================
-    const walletConnected =
-      user.authProviders?.wallet?.connected ?? false;
+    // The connected address is recorded as an identity link. `walletAddress` is
+    // only adopted when this account has no wallet yet: an account issued a
+    // custodial wallet keeps it, because replacing it would orphan the stored
+    // key and break every relayed call.
+    const linkedWalletAddress = walletAddress.toLowerCase();
 
-    if (!walletConnected) {
-      // Link wallet provider to existing user
-      user.authProviders = user.authProviders || {};
-      user.authProviders.wallet = {
-        connected: true,
-        walletAddress: walletAddress.toLowerCase(),
-        connectedAt: new Date(),
-      };
+    authService.useConnectedWallet(user, linkedWalletAddress);
 
-      // Backward compat
-      user.walletAddress = walletAddress.toLowerCase();
-      user.authProvider = authService.getPrimaryProvider(user.authProviders);
+    user.authProviders = user.authProviders || {};
+    user.authProviders.wallet = {
+      ...(user.authProviders?.wallet || {}),
+      connected: true,
+      walletAddress: linkedWalletAddress,
+      connectedAt: user.authProviders?.wallet?.connectedAt || new Date(),
+    };
 
-      authService.logAuthEvent("Wallet provider linked to existing account", {
-        userId: user._id,
-        walletAddress: walletAddress.toLowerCase(),
-      });
-    } else {
-      authService.logAuthEvent("Wallet provider already linked", {
-        userId: user._id,
-        walletAddress: walletAddress.toLowerCase(),
-      });
-    }
+    user.authProvider = authService.getPrimaryProvider(user.authProviders);
+
+    authService.logAuthEvent("Wallet connected", {
+      userId: user._id,
+      linkedAddress: linkedWalletAddress,
+      actingAddress: user.walletAddress || null,
+    });
 
     // ============================================================================
     // STEP 4: Clear used nonce and save
@@ -1038,6 +1036,17 @@ const getCurrentUser = async (req, res) => {
       userId: user._id,
       email: user.email,
     });
+
+    // Lazy backfill: Google/GitHub accounts created before custodial wallets
+    // were provisioned have no key, so every relay would fail with
+    // walletRequired. Fix it here rather than making the user re-authenticate.
+    // Wallet users are skipped - their walletAddress is the one they connected.
+    if (!user.authProviders?.wallet?.connected && authService.ensureCustodialWallet(user).changed) {
+      await user.save();
+      authService.logAuthEvent("Custodial wallet provisioned on profile fetch", {
+        userId: user._id,
+      });
+    }
 
     res.status(200).json({
       msg: "User info retrieved",

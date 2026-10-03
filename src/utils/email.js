@@ -145,6 +145,71 @@ If you did not request this verification code, you can safely ignore this email.
 };
 
 /**
+ * Send an OTP that authorises a SENSITIVE action (revealing the custodial
+ * private key). Deliberately separate from sendOtpEmail so a pending
+ * registration verification is never overwritten, and worded to tell the user
+ * exactly what they are authorising.
+ *
+ * @param {Object} user - User object with email and fullName
+ * @param {String} otp - 6-digit OTP to send
+ */
+const sendSensitiveActionOtpEmail = async (user, otp) => {
+  try {
+    const body = `
+<h1 style="margin: 0 0 16px 0; color: #1d1b20; font-size: 28px; font-weight: bold;">Confirm it's you</h1>
+<p style="margin: 0 0 24px 0; color: #494551; font-size: 16px; line-height: 1.5;">
+Hi <strong>${user.fullName || "User"}</strong>, you asked to view the private key of your Blockefy custodial wallet. Use the code below to confirm it was really you.
+</p>
+
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #eff6ff; border-radius: 12px; margin-bottom: 24px;">
+<tbody><tr>
+<td align="center" style="padding: 32px;">
+<div style="color: #4f378a; letter-spacing: 0.2em; font-size: 44px; font-weight: bold; margin: 0; font-family: monospace;">
+${otp}
+</div>
+</td>
+</tr>
+</tbody></table>
+
+<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8f2fa; border: 1px solid #cbc4d2; border-radius: 8px; margin-bottom: 24px;">
+<tbody><tr>
+<td style="padding: 20px;">
+<p style="margin: 0 0 12px 0; color: #1d1b20; font-weight: bold; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">⚠️ Whoever holds this key holds the funds</p>
+<ul style="margin: 0; padding: 0; list-style: none;">
+<li style="color: #494551; font-size: 14px; margin-bottom: 8px;">• Blockefy staff will <strong>never</strong> ask you for your private key.</li>
+<li style="color: #494551; font-size: 14px; margin-bottom: 8px;">• If you did not request this, someone may be trying to access your account.</li>
+<li style="color: #494551; font-size: 14px;">• This code expires in <strong>10 minutes</strong> and can only be used once.</li>
+</ul>
+</td>
+</tr>
+</tbody></table>
+
+<p style="margin: 0; color: #7a7582; font-size: 14px; line-height: 1.5;">
+Didn't request this? Ignore this email and consider changing your password.
+</p>
+    `;
+
+    const htmlContent = getEmailTemplate({
+      title: "Confirm your identity - Blockefy",
+      body: body,
+    });
+
+    const result = await transporter.sendMail({
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: user.email,
+      subject: "Your Blockefy confirmation code",
+      html: htmlContent,
+      text: `Confirm it's you\n\nYou asked to view the private key of your Blockefy custodial wallet.\n\nYour code is:\n${otp}\n\nWhoever holds this key holds the funds. Blockefy staff will never ask for it.\n\nThis code expires in 10 minutes.\n\nDidn't request this? Ignore this email.`,
+    });
+    console.log("Sensitive action OTP email sent:", result.messageId);
+    return result;
+  } catch (error) {
+    console.error("Error sending sensitive action OTP email:", error);
+    throw error;
+  }
+};
+
+/**
  * Send email verification link to user
  * @param {Object} user - User object with email and fullName
  * @param {String} verificationToken - Token for verification
@@ -280,5 +345,6 @@ module.exports = {
   transporter,
   sendVerificationEmail,
   sendOtpEmail,
+  sendSensitiveActionOtpEmail,
   sendPasswordResetEmail,
 };

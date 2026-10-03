@@ -2,8 +2,10 @@ const mongoose = require("mongoose");
 const Project = require("../models/Project");
 const Proposal = require("../models/Proposal");
 const Milestone = require("../models/Milestone");
+const User = require("../models/User");
 const AppError = require("../utils/AppError");
 const chainService = require("./chain.service");
+const walletActor = require("./walletActor.service");
 const { notifyProject } = require("./notification.service");
 
 /**
@@ -37,6 +39,18 @@ const POPULATE_BUYER = {
   select: "firstName lastName email avatar username buyerProfile.company buyerProfile.industry",
 };
 
+const PROJECT_TYPES = ["fixed", "hourly"];
+const ON_CHAIN_TYPES = ["fixclaim", "milestones"];
+
+/**
+ * The on-chain contract variant ("fixclaim" vs "milestones") is chosen by the
+ * client explicitly; otherwise fall back to deriving it from the pricing type.
+ */
+const resolveOnChainType = (body, projectType) =>
+  ON_CHAIN_TYPES.includes(body?.onChainProjectType)
+    ? body.onChainProjectType
+    : onChainTypeName(projectType);
+
 const projectCreateableFields = (body) => ({
   title: body.title,
   description: body.description,
@@ -44,7 +58,9 @@ const projectCreateableFields = (body) => ({
   subcategory: body.subcategory || null,
   skills: Array.isArray(body.skills) ? body.skills : [],
   experienceLevel: body.experienceLevel || "intermediate",
-  projectType: body.projectType || "fixed",
+  // Clients may send the on-chain label ("milestones"/"fixclaim") by mistake;
+  // normalize to a valid model value instead of failing validation.
+  projectType: PROJECT_TYPES.includes(body.projectType) ? body.projectType : "fixed",
   budget: body.budget && body.budget.max
     ? { min: body.budget.min || 0, max: body.budget.max, currency: body.currency || "ETH" }
     : undefined,
@@ -63,6 +79,116 @@ const getOwnedProject = async ({ projectId, user }) => {
   return project;
 };
 
+/**
+ * Escrow and on-chain state are only visible to the project's client, its hired
+ * freelancer, and admins. `getOwnedProject` intentionally performs NO
+ * authorization (public project pages rely on it), so every escrow / contract
+ * endpoint must call this explicitly before touching funds.
+ */
+const assertProjectParticipant = async ({ projectId, user }) => {
+  const project = await getOwnedProject({ projectId, user });
+  if (user?.role === "admin") return project;
+  const uid = String(user?._id || "");
+  const isClient = String(project.buyerId?._id || project.buyerId) === uid;
+  const isFreelancer =
+    String(project.hiredSellerId?._id || project.hiredSellerId || "") === uid;
+  if (!isClient && !isFreelancer) {
+    throw new AppError("You are not a participant in this project", 403, "FORBIDDEN");
+  }
+  return project;
+};
+
+const assertBuyerOwner = (project, user) => {
+  if (String(project.buyerId?._id || project.buyerId) !== String(user._id) && user.role !== "admin") {
+    throw new AppError("Only the client who created this project can do that", 403, "FORBIDDEN");
+  }
+};
+
+/**
+ * Resolves the key used to relay the on-chain createProject call.
+ *
+ * `createProject` / `approveProject` are `onlyClient` on-chain: msg.sender BECOMES
+ * `project.client`. There is no way for a third party to create a project on a
+ * buyer's behalf, so there must be NO admin fallback here - doing so would record
+ * the admin as the on-chain client while MongoDB records the buyer, and the buyer
+ * could then never fund, approve or refund their own project. Use the buyer's own
+ * key, and prove it controls the right wallet before signing.
+ *
+ * Which of the buyer's keys is correct depends on the project:
+ *   - already published -> whichever one controls its recorded on-chain client
+ *   - not yet published -> their preferred wallet (`walletMode`)
+ * `resolveActorKey` reads the chain to decide; see walletActor.service.js.
+ */
+const resolveProjectRelayKey = async (user, project = null) => {
+  if (!user?.walletPrivateKey && !user?.externalWallet?.privateKey) return null;
+
+  const resolved = await walletActor.resolveActorKey({
+    user,
+    project,
+    party: "client",
+    label: "You",
+  });
+
+  if (!resolved.actorKey) return null;
+
+  // Belt-and-braces: never sign as a wallet the key does not control.
+  chainService.assertKeyControlsAddress(resolved.actorKey, resolved.actorAddress, "You");
+  return resolved.actorKey;
+};
+
+/**
+ * Pushes a project on-chain via the backend relayer and opens it for proposals.
+ * Shared by createProject (post-now) and publishProject (draft -> post later).
+ * @returns {{ txHash?: string, onChainProjectId?: number, onChainError?: string|null, walletRequired: boolean }}
+ */
+const pushProjectOnChain = async ({ project, user }) => {
+  if (project.onChainProjectId) {
+    return { onChainProjectId: project.onChainProjectId, onChainError: null, walletRequired: false };
+  }
+  const relayKey = await resolveProjectRelayKey(user, project);
+  if (!relayKey) {
+    return { onChainError: null, walletRequired: true };
+  }
+  try {
+    await chainService.assertChainAvailable();
+    const { txHash, receipt } = await chainService.relayCallAs({
+      actorKey: relayKey,
+      method: "createProject",
+      args: [onChainTypeFor(), project.projectNumber],
+      context: {
+        userId: user?._id || user?.id || null,
+        projectId: project._id,
+        description: `Published project ${project.projectNumber} on-chain`,
+      },
+    });
+    const created = chainService.parseEventFromReceipt(receipt, "ProjectCreated");
+    const onChainProjectId = created
+      ? Number(created.args.projectId)
+      : await chainService.getProjectCounter();
+    return { onChainProjectId, txHash, onChainError: null, walletRequired: false };
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    return { onChainError: error.message, walletRequired: false };
+  }
+};
+
+/** Notifies matching freelancers that a project is now open for proposals. */
+const notifyFreelancersOfProject = async (project) => {
+  try {
+    const buyer = await User.findById(project.buyerId)
+      .select("firstName lastName username")
+      .lean();
+    const buyerName =
+      [buyer?.firstName, buyer?.lastName].filter(Boolean).join(" ").trim() || buyer?.username || "A client";
+    await notifyProject.projectPosted(project, {
+      skills: Array.isArray(project.skills) ? project.skills : [],
+      buyerName,
+    });
+  } catch (error) {
+    console.error("Project fan-out notification failed (non-fatal):", error.message);
+  }
+};
+
 const assertRole = (user, role, message = "Not authorized") => {
   if (user.role !== role && user.role !== "admin") {
     throw new AppError(message, 403, "FORBIDDEN");
@@ -70,55 +196,88 @@ const assertRole = (user, role, message = "Not authorized") => {
 };
 
 /**
- * Creates a project. When the acting buyer has a stored private key OR a
- * relayer wallet is configured, the project is created on-chain immediately;
- * otherwise the project is saved as a draft with `walletRequired` and the
- * frontend pushes it to the chain via /projects/:id/onchain.
+ * Creates a project.
+ *
+ * `body.saveAsDraft === true` keeps it as a draft (client can post it later via
+ * publishProject). Otherwise the project is pushed on-chain immediately and
+ * opened for proposals so freelancers are notified. When the buyer has no stored
+ * wallet key the project stays a draft with `walletRequired` and the frontend
+ * completes the on-chain step via /projects/:id/onchain.
  */
 const createProject = async ({ user, body }) => {
   const data = projectCreateableFields(body);
+  const saveAsDraft = body.saveAsDraft === true || body.status === "draft";
   const project = new Project({
     projectNumber: await Project.generateProjectNumber(),
     buyerId: user._id,
     ...data,
-    onChainProjectType: onChainTypeName(data.projectType),
+    onChainProjectType: resolveOnChainType(body, data.projectType),
     status: "draft",
   });
 
   let walletRequired = false;
   let onChainError = null;
+  let createTxHash = null;
 
-  if (user.walletPrivateKey) {
-    try {
-      await chainService.assertChainAvailable();
-      const { txHash, receipt } = await chainService.relayCallAs({
-        actorKey: user.walletPrivateKey,
-        method: "createProject",
-        args: [onChainTypeFor(), project.projectNumber],
-      });
-      const created = chainService.parseEventFromReceipt(receipt, "ProjectCreated");
-      const onChainProjectId = created
-        ? Number(created.args.projectId)
-        : await chainService.getProjectCounter();
-      project.onChainProjectId = onChainProjectId;
+  if (!saveAsDraft) {
+    const result = await pushProjectOnChain({ project, user });
+    walletRequired = result.walletRequired;
+    onChainError = result.onChainError || null;
+    if (result.onChainProjectId) {
+      project.onChainProjectId = result.onChainProjectId;
+      createTxHash = result.txHash || null;
+      project.metadata = createTxHash ? { createTxHash } : project.metadata;
       project.status = "open";
-      project.metadata = { createTxHash: txHash };
-    } catch (error) {
-      if (error instanceof AppError) throw error;
-      onChainError = error.message;
     }
   } else {
-    walletRequired = true;
+    walletRequired = false;
   }
 
   await project.save();
+
+  if (project.status === "open") {
+    await notifyFreelancersOfProject(project);
+  }
 
   return {
     project,
     walletRequired,
     onChainError: onChainError || null,
-    createTxHash: project.metadata?.createTxHash || null,
+    createTxHash: createTxHash || project.metadata?.createTxHash || null,
   };
+};
+
+/**
+ * Publishes a draft project: pushes it on-chain, flips it to `open` so
+ * freelancers can see and apply, and notifies matching freelancers.
+ */
+const publishProject = async ({ user, projectId }) => {
+  const project = await getOwnedProject({ projectId, user });
+  assertBuyerOwner(project, user);
+  if (project.status !== "draft") {
+    throw new AppError("Only a draft project can be published", 409, "INVALID_STATE");
+  } 
+  const result = await pushProjectOnChain({ project, user });
+  
+  if (result.walletRequired) {
+    return { project, walletRequired: true, published: false };
+  }
+  if (result.onChainError) {
+    throw new AppError(
+      `Could not publish the project on-chain: ${result.onChainError}`,
+      502,
+      "CHAIN_ERROR"
+    );
+  }
+  if (result.onChainProjectId) project.onChainProjectId = result.onChainProjectId;
+  if (result.txHash) project.metadata = { ...(project.metadata || {}), createTxHash: result.txHash };
+  project.status = "open";
+  project.publishedAt = new Date();
+  await project.save();
+
+  await notifyFreelancersOfProject(project);
+
+  return { project, walletRequired: false, published: true };
 };
 
 /**
@@ -142,7 +301,7 @@ const confirmOnChainProject = async ({ user, projectId, txHash }) => {
     throw new AppError("No project creation event in this transaction", 422, "TX_INVALID");
   }
   project.onChainProjectId = Number(event.args.projectId);
-  project.onChainProjectType = onChainTypeName(project.projectType);
+  project.onChainProjectType = project.onChainProjectType || onChainTypeName(project.projectType);
   project.status = "open";
   project.metadata = { createTxHash: txHash };
   await project.save();
@@ -279,10 +438,12 @@ const cancelProject = async ({ user, projectId, reason }) => {
 
 module.exports = {
   createProject,
+  publishProject,
   confirmOnChainProject,
   listProjects,
   getProject,
   cancelProject,
   getOwnedProject,
+  assertProjectParticipant,
   assertRole,
 };
