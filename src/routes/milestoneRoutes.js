@@ -2,6 +2,7 @@ const express = require("express");
 const authenticate = require("../middleware/authenticate");
 const authorizeRole = require("../middleware/authorizeRole");
 const validateObjectId = require("../middleware/validateObjectId");
+const requireVerifiedEmail = require("../middleware/requireVerifiedEmail");
 const milestoneController = require("../controllers/milestoneController");
 
 const router = express.Router();
@@ -47,6 +48,7 @@ router.post(
   "/milestones/:milestoneId/approve",
   validateObjectId("milestoneId"),
   authorizeRole("buyer"),
+  requireVerifiedEmail,
   milestoneController.approveMilestone
 );
 

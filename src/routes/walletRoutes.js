@@ -1,6 +1,7 @@
 const express = require("express");
 const walletService = require("../services/wallet.service");
-const authMiddleware = require("../middleware/authMiddleware");
+const authenticate = require("../middleware/authenticate");
+const requireVerifiedEmail = require("../middleware/requireVerifiedEmail");
 const { createRateLimiter, userKeyFn } = require("../middleware/rateLimiter");
 
 const router = express.Router();
@@ -21,7 +22,7 @@ const keyRevealLimiter = createRateLimiter({
  */
 router.get(
   "/wallet/overview",
-  authMiddleware.verifyToken,
+  authenticate,
   async (req, res, next) => {
     try {
       const overview = await walletService.getOverview(req.authUser._id);
@@ -40,7 +41,7 @@ router.get(
  */
 router.get(
   "/wallet/transactions",
-  authMiddleware.verifyToken,
+  authenticate,
   async (req, res, next) => {
     try {
       const limit = Number(req.query.limit) || 50;
@@ -65,7 +66,7 @@ router.get(
  */
 router.post(
   "/wallet/key/reveal-request",
-  authMiddleware.verifyToken,
+  authenticate,
   keyRevealLimiter,
   async (req, res, next) => {
     try {
@@ -87,7 +88,8 @@ router.post(
  */
 router.post(
   "/wallet/key/reveal",
-  authMiddleware.verifyToken,
+  authenticate,
+  requireVerifiedEmail,
   keyRevealLimiter,
   async (req, res, next) => {
     try {
@@ -123,7 +125,8 @@ const keyImportLimiter = createRateLimiter({
  */
 router.post(
   "/wallet/key/import",
-  authMiddleware.verifyToken,
+  authenticate,
+  requireVerifiedEmail,
   keyImportLimiter,
   async (req, res, next) => {
     try {

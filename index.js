@@ -32,9 +32,20 @@ const app = express();
 // Security headers (helmet)
 app.use(helmet());
 
-// CORS
+// CORS - restrict to configured origins instead of reflecting everything (F15).
+// Allowed origins: CORS_ORIGINS (comma-separated) or FRONTEND_URL / BASE_URL.
+// `origin: true` is used ONLY as a fallback when no origin is configured at all
+// (explicitly opted-in; production deployments should set CORS_ORIGINS).
+const resolveCorsOrigins = () =>
+  (process.env.CORS_ORIGINS || `${process.env.FRONTEND_URL || ""},${process.env.BASE_URL || ""}`)
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+
+const corsOrigins = resolveCorsOrigins();
+
 app.use(cors({
-  origin:true,
+  origin: corsOrigins.length ? corsOrigins : true,
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -84,6 +95,14 @@ app.get("/", (req, res) => {
 
 // Global permissive rate limit (specific endpoints have stricter limits)
 app.use("/api/", createRateLimiter({ windowMs: 60_000, max: 600, keyFn: (req) => req.ip }));
+
+// Legacy non-/api prefixes were previously unthrottled (F3): they carried no
+// limiter of their own while the Web3/order stack does. Give them a shared
+// ceiling; auth endpoints additionally get strict per-route limiters.
+app.use(
+  ["/gigs", "/onboarding", "/profile", "/dashboard", "/orders"],
+  createRateLimiter({ windowMs: 60_000, max: 300, keyFn: (req) => req.ip })
+);
 
 // Mount routes
 app.use("/auth", authRoutes);

@@ -366,7 +366,7 @@ test("a relay never signs as the wrong actor", () => {
   );
 
   const escrow = fs.readFileSync(path.join(SRC, "services", "escrow.service.js"), "utf8");
-  const er = escrow.slice(escrow.indexOf("const resolveRelayKey"), escrow.indexOf("const resolveRelayKey") + 2000);
+  const er = escrow.slice(escrow.indexOf("const resolveRelayKey"), escrow.indexOf("const resolveRelayKey") + 4000);
   assert.ok(
     !/ADMIN_PRIVATE_KEY/.test(er),
     "claimMilestone is onlyClient-or-onlyFreelancer; an admin key would always revert"

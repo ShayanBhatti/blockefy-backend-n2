@@ -511,9 +511,11 @@ exports.getGigDetails = async (req, res) => {
     }
 
     // Find the gig with populated user details
+    // `email`/`phone` are deliberately excluded: public gig browsing must not
+    // expose seller PII (F8).
     const gig = await Gig.findById(gigId).populate(
       "userId",
-      "firstName lastName email role profilePicture phone bio rating totalReviews"
+      "firstName lastName role profilePicture bio rating totalReviews"
     );
 
     if (!gig) {
@@ -730,8 +732,10 @@ exports.getSellerDetails = async (req, res) => {
     }
 
     // Find the seller
+    // `email`/`phone` are deliberately excluded: public seller profiles must
+    // not expose PII (F8).
     const seller = await User.findById(sellerId).select(
-      "firstName lastName email profilePicture phone bio role rating totalReviews category createdAt onboardingStep"
+      "firstName lastName profilePicture bio role rating totalReviews category createdAt onboardingStep"
     );
 
     if (!seller) {

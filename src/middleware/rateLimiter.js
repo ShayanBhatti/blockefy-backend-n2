@@ -52,4 +52,11 @@ const createRateLimiter = ({ windowMs = 60_000, max = 100, keyFn } = {}) => {
  */
 const userKeyFn = (req) => req.authUser?._id?.toString() || req.ip || "anonymous";
 
-module.exports = { createRateLimiter, userKeyFn };
+/**
+ * Rate limit keyed purely by client IP — for pre-authentication routes
+ * (login, register, OTP verify, wallet nonce/verify), where there is no
+ * authenticated user id to key on yet.
+ */
+const ipKeyFn = (req) => req.ip || "anonymous";
+
+module.exports = { createRateLimiter, userKeyFn, ipKeyFn };

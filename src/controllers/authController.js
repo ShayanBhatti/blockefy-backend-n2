@@ -2,15 +2,24 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const User = require("../models/User");
+const WalletChallenge = require("../models/WalletChallenge");
+const OAuthCode = require("../models/OAuthCode");
 const authService = require("../services/authService");
 const {
   generateWallet,
   generateNonce,
   verifySignature,
   isValidAddress,
+  buildAuthMessage,
 } = require("../utils/wallet");
 const { sendOtpEmail } = require("../utils/email");
 const { generateOtp } = require("../utils/generateOtp");
+
+// ============================================================================
+// Password strength policy (F5) — implementation lives in utils/passwordPolicy.js
+// so it is independently unit-testable.
+// ============================================================================
+const { validatePasswordStrength } = require("../utils/passwordPolicy");
 
 /**
  * ✅ Rate limiting helper - check if user can send another OTP
@@ -59,6 +68,73 @@ const generateToken = (userId) => {
     expiresIn: "7d",
   });
 };
+
+/**
+ * Exchange a one-time OAuth code for a JWT (F1).
+ *
+ * POST /auth/exchange
+ *
+ * The OAuth callbacks redirect the browser to `/auth-success?code=<code>` with
+ * a single-use, ~60s-lived code instead of a JWT. This endpoint is the only
+ * way to turn that code into a session: response body only, never in a URL.
+ * The code is deleted on first use (single-use) and self-expires via TTL.
+ */
+const exchangeOAuthCode = async (req, res) => {
+  try {
+    const { code } = req.body || {};
+
+    if (typeof code !== "string" || !code) {
+      return res.status(400).json({
+        msg: "Code is required",
+        code: "MISSING_CODE",
+      });
+    }
+
+    const exchange = await OAuthCode.findOne({ code });
+    if (!exchange) {
+      // Unknown or already-consumed code - identical response either way.
+      return res.status(401).json({
+        msg: "Invalid or expired code. Please sign in again.",
+        code: "INVALID_CODE",
+      });
+    }
+
+    if (Date.now() > exchange.expiresAt) {
+      await OAuthCode.deleteOne({ _id: exchange._id });
+      return res.status(401).json({
+        msg: "Invalid or expired code. Please sign in again.",
+        code: "INVALID_CODE",
+      });
+    }
+
+    // Single-use: consume before issuing anything, so a replay (e.g. from a
+    // second tab or a leaked code) can never mint a second token.
+    await OAuthCode.deleteOne({ _id: exchange._id });
+
+    const user = await User.findById(exchange.userId);
+    if (!user) {
+      return res.status(401).json({
+        msg: "Account no longer exists",
+        code: "UNAUTHORIZED",
+      });
+    }
+
+    const token = generateToken(user._id);
+
+    res.status(200).json({
+      msg: "Authentication successful",
+      code: "OAUTH_EXCHANGE_OK",
+      token,
+      user: authService.buildUserResponse(user),
+    });
+  } catch (error) {
+    console.error("OAuth exchange error:", error.message);
+    res.status(500).json({
+      msg: "Exchange failed",
+      code: "EXCHANGE_FAILED",
+    });
+  }
+};
 /**
  * Register with Email/Password
  * POST /auth/register
@@ -79,6 +155,15 @@ const register = async (req, res) => {
     if (!email || !password || !fullName || !username) {
       return res.status(400).json({
         msg: "email, password, fullName, and username are required",
+      });
+    }
+
+    // Enforce password strength policy (F5)
+    const passwordError = validatePasswordStrength(password);
+    if (passwordError) {
+      return res.status(400).json({
+        msg: passwordError,
+        code: "WEAK_PASSWORD",
       });
     }
 
@@ -307,15 +392,13 @@ const login = async (req, res) => {
       authService.logAuthEvent("Email login failed - email provider not connected", {
         userId: user._id,
         email: user.email,
-        connectedProviders: authService.getConnectedProviders(user),
       });
 
-      // Provide helpful message
-      const connectedProviders = authService.getConnectedProviders(user);
-      return res.status(403).json({
-        msg: `Email login is not enabled for this account. Try logging in with: ${connectedProviders.join(", ")}`,
-        code: "EMAIL_PROVIDER_NOT_CONNECTED",
-        connectedProviders,
+      // Generic response - do not reveal authentication methods for this email
+      // address (F12).
+      return res.status(401).json({
+        msg: "Invalid email or password",
+        code: "INVALID_CREDENTIALS",
       });
     }
 
@@ -398,38 +481,17 @@ const generateNonceController = async (req, res) => {
     // Generate nonce
     const { nonce, expiresAt, message } = generateNonce();
 
-    // Find or create wallet user for nonce storage
-    let user = await User.findOne({
-      "authProviders.wallet.walletAddress": walletAddress.toLowerCase(),
-    });
-
-    if (!user) {
-      // Wallet not found, create temporary document for nonce storage
-      user = new User({
-        walletAddress: walletAddress.toLowerCase(),
-        authProviders: {
-          email: { connected: false },
-          google: { connected: false },
-          github: { connected: false },
-          wallet: {
-            connected: false,
-            walletAddress: walletAddress.toLowerCase(),
-          },
-        },
-        role: "buyer",
-        onboardingStep: 0,
-        onboardingCompleted: false,
-      });
-    }
-
-    // Store nonce in database (15 minutes expiry)
-    user.walletNonce = nonce;
-    user.walletNonceExpires = expiresAt;
-    await user.save();
+    // Store the challenge keyed by wallet address. No user document is created
+    // here - an anonymous address can no longer create DB rows (F13), and the
+    // challenge is one-time and self-expiring via the model's TTL index.
+    await WalletChallenge.findOneAndUpdate(
+      { walletAddress: walletAddress.toLowerCase() },
+      { nonce, expiresAt },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
     authService.logAuthEvent("Wallet nonce generated", {
       walletAddress: walletAddress.toLowerCase(),
-      userId: user._id,
     });
 
     res.status(200).json({
@@ -502,7 +564,54 @@ const verifyWalletSignature = async (req, res) => {
     }
 
     // ============================================================================
-    // STEP 1: Find user by wallet address
+    // STEP 1: Verify the server-issued challenge and bind the signature to it
+    // ============================================================================
+    // The signature must be over EXACTLY the message derived from the nonce the
+    // server issued (and stored server-side): accepting an arbitrary
+    // client-supplied message would let an attacker replay a signature captured
+    // from a phishing page against an account they do not control (F2).
+    const challenge = await WalletChallenge.findOne({
+      walletAddress: walletAddress.toLowerCase(),
+    });
+
+    if (!challenge || !challenge.nonce) {
+      authService.logAuthEvent("Wallet verification failed - nonce not found", {
+        walletAddress: walletAddress.toLowerCase(),
+      });
+
+      return res.status(401).json({
+        msg: "Nonce not found. Generate a nonce first.",
+        code: "NONCE_NOT_FOUND",
+      });
+    }
+
+    if (Date.now() > challenge.expiresAt) {
+      await WalletChallenge.deleteOne({ _id: challenge._id });
+
+      authService.logAuthEvent("Wallet verification failed - nonce expired", {
+        walletAddress: walletAddress.toLowerCase(),
+      });
+
+      return res.status(401).json({
+        msg: "Nonce expired. Please generate a new one.",
+        code: "NONCE_EXPIRED",
+      });
+    }
+
+    const expectedMessage = buildAuthMessage(challenge.nonce);
+    if (message !== expectedMessage) {
+      authService.logAuthEvent("Wallet verification failed - message does not match nonce", {
+        walletAddress: walletAddress.toLowerCase(),
+      });
+
+      return res.status(401).json({
+        msg: "Signed message does not match the issued nonce",
+        code: "INVALID_MESSAGE",
+      });
+    }
+
+    // ============================================================================
+    // STEP 2: Find (or create) the user for this wallet address
     // ============================================================================
     let user = await User.findOne({
       "authProviders.wallet.walletAddress": walletAddress.toLowerCase(),
@@ -515,34 +624,29 @@ const verifyWalletSignature = async (req, res) => {
       });
     }
 
-    // ============================================================================
-    // STEP 2: Verify nonce
-    // ============================================================================
-    if (!user || !user.walletNonce) {
-      authService.logAuthEvent("Wallet verification failed - nonce not found", {
+    if (!user) {
+      authService.logAuthEvent("Wallet verification - creating new wallet-only user", {
         walletAddress: walletAddress.toLowerCase(),
       });
 
-      return res.status(401).json({
-        msg: "Nonce not found. Generate a nonce first.",
-        code: "NONCE_NOT_FOUND",
-      });
-    }
-
-    // Check nonce expiration
-    if (!user.walletNonceExpires || Date.now() > user.walletNonceExpires) {
-      // Clear expired nonce
-      user.walletNonce = null;
-      user.walletNonceExpires = null;
-      await user.save();
-
-      authService.logAuthEvent("Wallet verification failed - nonce expired", {
+      user = new User({
+        email: null,
         walletAddress: walletAddress.toLowerCase(),
-      });
-
-      return res.status(401).json({
-        msg: "Nonce expired. Please generate a new one.",
-        code: "NONCE_EXPIRED",
+        authProviders: {
+          email: { connected: false },
+          google: { connected: false },
+          github: { connected: false },
+          wallet: {
+            connected: true,
+            walletAddress: walletAddress.toLowerCase(),
+            connectedAt: new Date(),
+          },
+        },
+        authProvider: "wallet",
+        role: "buyer",
+        onboardingStep: 0,
+        onboardingCompleted: false,
+        emailVerified: false,
       });
     }
 
@@ -574,11 +678,14 @@ const verifyWalletSignature = async (req, res) => {
     });
 
     // ============================================================================
-    // STEP 4: Clear used nonce and save
+    // STEP 4: Consume the one-time challenge and persist
     // ============================================================================
+    // The embedded wallet link is saved via `useConnectedWallet` at STEP 3; the
+    // challenge is deleted here so it can never be replayed.
     user.walletNonce = null;
     user.walletNonceExpires = null;
     await user.save();
+    await WalletChallenge.deleteOne({ _id: challenge._id });
 
     // ============================================================================
     // STEP 5: Generate JWT token and return
@@ -794,9 +901,10 @@ const verifyOtp = async (req, res) => {
         email: email.toLowerCase(),
       });
 
+      // Generic response - do not reveal whether the email is registered (F12)
       return res.status(400).json({
-        msg: "User not found",
-        code: "USER_NOT_FOUND",
+        msg: "Invalid OTP",
+        code: "INVALID_OTP",
       });
     }
 
@@ -839,6 +947,30 @@ const verifyOtp = async (req, res) => {
     // Compare OTP
     if (user.emailOtp !== otp.trim()) {
       user.emailOtpAttempts = (user.emailOtpAttempts || 0) + 1;
+
+      // Hard cap on failed attempts: after 5 the issued OTP is burned and a new
+      // one is required. Combined with the OTP endpoint rate limiter this closes
+      // the offline brute-force window (F4).
+      const MAX_OTP_ATTEMPTS = 5;
+      if (user.emailOtpAttempts >= MAX_OTP_ATTEMPTS) {
+        user.emailOtp = null;
+        user.emailOtpExpires = null;
+        user.emailOtpAttempts = 0;
+        await user.save();
+
+        authService.logAuthEvent("OTP verification - attempts exceeded", {
+          userId: user._id,
+          email: user.email,
+          attempts: user.emailOtpAttempts,
+        });
+
+        return res.status(429).json({
+          msg: "Too many failed attempts. Please request a new OTP.",
+          code: "OTP_ATTEMPTS_EXCEEDED",
+          requiresNewOtp: true,
+        });
+      }
+
       await user.save();
 
       authService.logAuthEvent("OTP verification failed - invalid OTP", {
@@ -1073,6 +1205,7 @@ module.exports = {
   resendOtp,
   generateNonce: generateNonceController,
   verifyWalletSignature,
+  exchangeOAuthCode,
   handleOAuthCallback,
   getCurrentUser,
 };

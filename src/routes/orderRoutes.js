@@ -3,6 +3,7 @@ const router = express.Router();
 const orderController = require("../controllers/orderController");
 const authenticate = require("../middleware/authenticate");
 const authorizeRole = require("../middleware/authorizeRole");
+const requireVerifiedEmail = require("../middleware/requireVerifiedEmail");
 const validateObjectId = require("../middleware/validateObjectId");
 const validate = require("../middleware/validate");
 const { s } = require("../utils/validate");
@@ -104,6 +105,7 @@ router.post(
 router.post(
   "/create-payment",
   authenticate,
+  requireVerifiedEmail,
   authorizeRole("buyer"),
   paymentLimit,
   validate(baseOrderSchema),
@@ -114,6 +116,7 @@ router.post(
 router.post(
   "/",
   authenticate,
+  requireVerifiedEmail,
   authorizeRole("buyer"),
   paymentLimit,
   validate(baseOrderSchema),
@@ -186,6 +189,7 @@ router.post(
 router.post(
   "/:orderId/accept",
   authenticate,
+  requireVerifiedEmail,
   authorizeRole("buyer"),
   strictLimit,
   validateObjectId("orderId"),

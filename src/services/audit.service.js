@@ -31,6 +31,7 @@ const audit = {
   cancellationRequested: (d) => auditLog("order.cancellation_requested", d),
   orderCancelled: (d) => auditLog("order.cancelled", d),
   disputeOpened: (d) => auditLog("order.dispute_opened", d),
+  relay: (d) => auditLog("contract.relayed", d),
   webhookProcessed: (d) => auditLog("payment.webhook_processed", d),
   webhookRejected: (d) => auditLog("payment.webhook_rejected", d),
 };

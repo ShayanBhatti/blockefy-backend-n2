@@ -2,8 +2,10 @@ const express = require("express");
 const authenticate = require("../middleware/authenticate");
 const authorizeRole = require("../middleware/authorizeRole");
 const validateObjectId = require("../middleware/validateObjectId");
+const requireVerifiedEmail = require("../middleware/requireVerifiedEmail");
 const escrowController = require("../controllers/escrowController");
 const smartContractController = require("../controllers/smartContractController");
+const { createRateLimiter, userKeyFn } = require("../middleware/rateLimiter");
 
 const router = express.Router();
 
@@ -25,6 +27,7 @@ router.post(
   "/escrow/projects/:projectId/deposit",
   validateObjectId("projectId"),
   authorizeRole("buyer"),
+  requireVerifiedEmail,
   escrowController.createDeposit
 );
 
@@ -33,6 +36,7 @@ router.post(
   "/escrow/projects/:projectId/deposit/confirm",
   validateObjectId("projectId"),
   authorizeRole("buyer"),
+  requireVerifiedEmail,
   escrowController.confirmDeposit
 );
 
@@ -50,6 +54,7 @@ router.post(
   "/escrow/projects/:projectId/refund",
   validateObjectId("projectId"),
   authorizeRole("buyer"),
+  requireVerifiedEmail,
   escrowController.refund
 );
 
@@ -83,7 +88,13 @@ router.get(
   smartContractController.getProjectState
 );
 
-// POST /api/contract/relay - whitelisted non-payable relay (escape hatch)
-router.post("/contract/relay", smartContractController.relay);
+// POST /api/contract/relay - whitelisted non-payable relay (escape hatch).
+// The relay limiter (20/min, per authenticated user) caps the blast radius of
+// the escape hatch: it is a convenience, not a faucet (F10).
+router.post(
+  "/contract/relay",
+  createRateLimiter({ windowMs: 60_000, max: 20, keyFn: userKeyFn }),
+  smartContractController.relay
+);
 
 module.exports = router;

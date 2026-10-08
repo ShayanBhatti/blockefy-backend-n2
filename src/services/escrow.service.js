@@ -4,6 +4,7 @@ const Project = require("../models/Project");
 const Transaction = require("../models/Transaction");
 const User = require("../models/User");
 const AppError = require("../utils/AppError");
+const { decrypt } = require("../utils/secretEncryption");
 const chainService = require("./chain.service");
 const walletActor = require("./walletActor.service");
 const { notifyProject } = require("./notification.service");
@@ -51,6 +52,17 @@ const resolveRelayKey = async ({ actorKey, milestone, project }) => {
       .select("walletAddress walletMode walletPrivateKey externalWallet.address +externalWallet.privateKey")
       .lean();
     if (!u) continue;
+
+    // lean() skips the schema init hook that decrypts key fields at rest.
+    u.walletPrivateKey = u.walletPrivateKey
+      ? decrypt(u.walletPrivateKey)
+      : u.walletPrivateKey;
+    if (u.externalWallet?.privateKey) {
+      u.externalWallet = {
+        ...u.externalWallet,
+        privateKey: decrypt(u.externalWallet.privateKey),
+      };
+    }
 
     // Whichever of the party's keys controls the wallet the CONTRACT has
     // recorded for them. `resolveActorKey` reads the on-chain client/freelancer,
@@ -468,7 +480,9 @@ const refund = async ({ project, user, reason }) => {
  */
 const resolveAdminKey = async () => {
   const admin = await User.findOne({ role: "admin" }).select("walletPrivateKey").lean();
-  const key = process.env.ADMIN_PRIVATE_KEY || admin?.walletPrivateKey;
+  // lean() skips the schema init hook that decrypts key fields at rest.
+  const adminKey = admin?.walletPrivateKey ? decrypt(admin.walletPrivateKey) : undefined;
+  const key = process.env.ADMIN_PRIVATE_KEY || adminKey;
   if (!key) throw new AppError("No admin wallet key available", 422, "NO_RELAY");
   await chainService.assertContractOwnerKey(key);
   return key;

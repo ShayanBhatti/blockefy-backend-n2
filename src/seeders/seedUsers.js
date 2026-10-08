@@ -38,10 +38,10 @@ const MONGO_URI = process.env.MONGODB_URI;
 
 // Publicly-known hardhat local network accounts (#0 -> #19).
 const WALLETS = [
-  { address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", privateKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" },
-  { address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", privateKey: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" },
-  { address: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC", privateKey: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a" },
-  { address: "0x90F79bf6EB2c4f870365E785982E1f101E93b906", privateKey: "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6" },
+  { address: "0x1d40d2495DF1242C6edb0320F34d7dd94437cbb0", privateKey: "0x82ad1919d570dc7d61340b2245e8c5576ef0127cff9ecfe71a0de7c65e037639" },
+  { address: "0xeec68301e07f9b6165916F91300f0C5d4E14047d", privateKey: "0x4a590762451917a0d5f94c9fd7ca7f4713788823677e2f7cdb8327148b02a7ef" },
+  { address: "0x228d3654bd50C9D97931d43707181BBb6C46a7c3", privateKey: "0x7f654e94a54b1c679a4cec1223dcfe64710ab07f989a4b34477cd7b184222f3c" },
+  { address: "0x7842eb9C98bE55A9C6aFf21cEf009975a0ab4f06", privateKey: "0x6c12f4201332ed7eeb727cdeaa6e38a7fb046d281a68ea0524f7ed582062a308" },
   { address: "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65", privateKey: "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a" },
   { address: "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc", privateKey: "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba" },
   { address: "0x976EA74026E726554dB657fA54763abd0C3a0aa9", privateKey: "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e" },
@@ -56,8 +56,8 @@ const WALLETS = [
   { address: "0xcd3B766CCDd6AE721141F452C550Ca635964ce71", privateKey: "0x8166f546bab6da521a8369cab06c5d2b9e46670292d85c875ee9ec20e84ffb61" },
   { address: "0x2546BcD3c84621e976D8185a91A922aE77ECEc30", privateKey: "0xea6c44ac03bff858b476bba40716402b03e41b8e97e276d1baec7c37d42484a0" },
   { address: "0xbDA5747bFD65F08deb54cb465eB87D40e51B197E", privateKey: "0x689af8efa8c651a91ad287602527f3af2fe9f6501a7ac4b061667b5a93e037fd" },
-  { address: "0xdD2FD4581271e230360230F9337D5c0430Bf44C0", privateKey: "0xde9be858da4a475276426320d5e9262ecfc3ba460bfac56360bfa6c4c28b4ee0" },
-  { address: "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199", privateKey: "0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e" },
+  { address: "0x4dbe61630e6C789C9715bdE0aADfBDF061174BFb", privateKey: "0x57b79a1d2c645428023f60e3f501cc876fe09d2000a421a67408fbc19d326d94" },
+  { address: "0x3c861c9cF20E4043Cc37c54e570fc243Bd99C397", privateKey: "0x77a820a42ee671f86178512bf6b6548b893dcbb9555046971697da31e44f5dcb" },
 ];
 
 /** Per-user image placeholders (swap in real Cloudinary URLs later). */
@@ -116,7 +116,7 @@ const SELLERS = [
     languages: ["English", "Urdu"],
   },
   {
-    key: "ahmed",
+    key: "mushaf",
     fullName: "Mushaf Ahmed",
     headline: "Data Scientist",
     tagline: "Turning raw data into forecasts, dashboards and ML products.",
@@ -520,11 +520,11 @@ const CLIENTS = [
     preferredCategories: ["digital-marketing", "video-animation"],
   },
   {
-    key: "tariq",
-    fullName: "Usman Tariq",
+    key: "kinzafatima",
+    fullName: "Kinza Fatima",
     headline: "Video Production House Owner",
     tagline: "Commercials and corporate videos for Pakistani brands.",
-    company: "Tariq Studios",
+    company: "Kinza Studios",
     interests: ["Video Production", "Direction", "Editing"],
     budgetRange: { min: 3000, max: 12000 },
     preferredCategories: ["video-animation", "music-audio"],

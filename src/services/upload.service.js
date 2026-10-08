@@ -7,6 +7,39 @@ const cloudinaryUtils = require("../utils/cloudinary");
  */
 
 /**
+ * Snapshots a file's first bytes against known image signatures. Asserting MAGIC
+ * BYTES (not the client-declared MIME/extension) is what makes the upload
+ * server-authoritative: MIME sniffing alone lets an attacker upload arbitrary
+ * content under an `image/png` label and have it later processed/served as an
+ * image (F16).
+ */
+const detectImageType = (buffer) => {
+  if (!buffer || buffer.length < 12) return null;
+  const bytes = [...new Uint8Array(buffer.subarray(0, 12))];
+
+  // JPEG: FF D8 FF
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpeg";
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e &&
+    bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a &&
+    bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) {
+    return "png";
+  }
+  // GIF: 47 49 46 38 ('GIF8')
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "gif";
+  // WebP: 'RIFF'....'WEBP'
+  if (
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) {
+    return "webp";
+  }
+  return null;
+};
+
+/**
  * Upload image to Cloudinary
  * @param {Object} file - Multer file object with buffer property
  * @param {String} folder - Cloudinary folder path (e.g., 'blockefy/profile-images')
@@ -35,6 +68,18 @@ const uploadImage = async (file, folder) => {
 
     if (!sanitizedFolder.includes("blockefy")) {
       throw new Error("Invalid folder path");
+    }
+
+    // Enforce real image content for anything that is NOT the order-files folder
+    // (order files legitimately carry PDF/ZIP attachments). The folder is the
+    // caller-controlled requirement, so only exact match opts out.
+    if (sanitizedFolder !== "blockefy/order-files") {
+      const detected = detectImageType(file.buffer);
+      if (!detected) {
+        throw new Error(
+          "Uploaded content is not a recognized image (JPEG/PNG/GIF/WebP)"
+        );
+      }
     }
 
     // Upload to Cloudinary

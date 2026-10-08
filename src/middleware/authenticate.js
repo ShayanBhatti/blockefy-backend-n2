@@ -1,5 +1,6 @@
 const { verifyToken } = require("./authMiddleware");
 const User = require("../models/User");
+const { decrypt } = require("../utils/secretEncryption");
 
 /**
  * Authentication middleware (order-system flavour).
@@ -16,12 +17,12 @@ const authenticate = async (req, res, next) => {
     verifyToken(req, res, async (err) => {
       if (err) return next(err);
       try {
-        // `+externalWallet.privateKey` is required: it is `select: false` on the schema
-// (so it is never serialised into a response), and on-chain relaying needs it.
-// Note: keep this projection `+`-only. Mixing `+`-prefixed fields with plain
-// field names makes Mongoose silently drop ALL of them - see the note in
-// services/wallet.service.js.
-const user = await User.findById(req.user.userId)
+        // `+externalWallet.privateKey` is required: it is `select: false` on the
+        // schema (so never serialised into a response), and on-chain relaying
+        // needs it. Keep this projection `+`-only. Mixing `+`-prefixed fields
+        // with plain field names makes Mongoose silently drop ALL of them - see
+        // the note in services/wallet.service.js.
+        const user = await User.findById(req.user.userId)
           .select("+walletPrivateKey +externalWallet.privateKey")
           .lean();
         if (!user) {
@@ -29,6 +30,17 @@ const user = await User.findById(req.user.userId)
         }
         if (user.isSuspended) {
           return res.status(403).json({ success: false, message: "Account suspended", code: "FORBIDDEN" });
+        }
+        // `lean()` skips the schema init hook that decrypts key fields, so the
+        // encrypted-at-rest values must be decrypted here before any relay use.
+        user.walletPrivateKey = user.walletPrivateKey
+          ? decrypt(user.walletPrivateKey)
+          : user.walletPrivateKey;
+        if (user.externalWallet?.privateKey) {
+          user.externalWallet = {
+            ...user.externalWallet,
+            privateKey: decrypt(user.externalWallet.privateKey),
+          };
         }
         req.authUser = user;
         next();

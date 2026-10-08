@@ -3,6 +3,7 @@ const AppError = require("../utils/AppError");
 const chainService = require("../services/chain.service");
 const walletActor = require("../services/walletActor.service");
 const Project = require("../models/Project");
+const { audit } = require("../services/audit.service");
 const { getOwnedProject, assertProjectParticipant } = require("../services/project.service");
 
 /**
@@ -160,6 +161,25 @@ const relay = asyncHandler(async (req, res) => {
       description: `Relayed ${method} on-chain`,
     },
   });
+
+  // Persist the last relay on the project so an operator/admin can reconstruct
+  // what happened and when without tailing raw events (F10). This is a metadata
+  // marker only - the chain tx is out of our control and could still be
+  // reverted; authoritative state always comes back from ChainEvent sync.
+  if (scopedProject?._id) {
+    await Project.updateOne(
+      { _id: scopedProject._id },
+      {
+        $set: {
+          "metadata.lastRelayedMethod": method,
+          "metadata.lastRelayedTx": txHash,
+          "metadata.lastRelayedAt": new Date(),
+        },
+      }
+    );
+  }
+  audit.relay({ method, txHash, userId: String(user._id), projectId: scopedProject?._id || null });
+
   res.json({ success: true, data: { method, args, txHash } });
 });
 

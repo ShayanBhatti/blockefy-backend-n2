@@ -1,4 +1,26 @@
 const mongoose = require("mongoose");
+const { encrypt, decrypt } = require("../utils/secretEncryption");
+
+const KEY_PATHS = ["walletPrivateKey", "externalWallet.privateKey"];
+
+const getNested = (obj, path) => {
+  let o = obj;
+  for (const key of path.split(".")) {
+    if (o == null) return undefined;
+    o = o[key];
+  }
+  return o;
+};
+
+const setNested = (obj, path, value) => {
+  const parts = path.split(".");
+  let o = obj;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    if (o[parts[i]] == null) o = o[parts[i]] = {};
+    o = o[parts[i]];
+  }
+  o[parts[parts.length - 1]] = value;
+};
 
 const userSchema = new mongoose.Schema(
   {
@@ -466,6 +488,44 @@ const userSchema = new mongoose.Schema(
     timestamps: true // Adds updatedAt field
   }
 );
+
+// ============================================================================
+// Key handling at rest
+//  - encrypt key fields on save (AES-256-GCM when WALLET_ENC_KEY is configured)
+//  - decrypt them transparently when a document is loaded (init)
+//  - redact keys + password from JSON serialization so they can never appear
+//    in API responses via res.json(doc)
+// Note: `lean()` queries bypass these hooks, so the few lean reads that need
+// keys decrypt explicitly (see authenticate / escrow.service).
+// ============================================================================
+const decryptKeyFields = (doc) => {
+  for (const path of KEY_PATHS) {
+    const value = getNested(doc, path);
+    if (value) setNested(doc, path, decrypt(value));
+  }
+};
+
+userSchema.pre("init", function onInit(doc) {
+  decryptKeyFields(doc);
+});
+
+userSchema.pre("save", async function onSave() {
+  for (const path of KEY_PATHS) {
+    const value = getNested(this, path);
+    if (value) setNested(this, path, encrypt(value));
+  }
+});
+
+userSchema.set("toJSON", {
+  transform: (doc, ret) => {
+    if (ret.password !== undefined) ret.password = undefined;
+    if (ret.walletPrivateKey !== undefined) ret.walletPrivateKey = undefined;
+    if (ret.externalWallet && ret.externalWallet.privateKey !== undefined) {
+      ret.externalWallet.privateKey = undefined;
+    }
+    return ret;
+  },
+});
 
 // Prevent model overwrite in serverless
 const User = mongoose.models.User || mongoose.model("User", userSchema);

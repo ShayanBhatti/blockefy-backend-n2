@@ -19,6 +19,16 @@ const generateWallet = () => {
 };
 
 /**
+ * Build the canonical sign-in message for a nonce.
+ *
+ * Single source of truth: BOTH `generateNonce` (issuing) and the wallet-verify
+ * controller (validating) must derive the expected message from this function
+ * so a submitted signature can be bound to the exact nonce the server issued.
+ */
+const buildAuthMessage = (nonce) =>
+  `Sign this message to authenticate:\n\nNonce: ${nonce}`;
+
+/**
  * Generate a nonce for wallet signature verification
  * Used for message signing authentication
  */
@@ -30,7 +40,7 @@ const generateNonce = () => {
   return {
     nonce,
     expiresAt,
-    message: `Sign this message to authenticate:\n\nNonce: ${nonce}`,
+    message: buildAuthMessage(nonce),
   };
 };
 
@@ -78,4 +88,5 @@ module.exports = {
   generateNonce,
   verifySignature,
   isValidAddress,
+  buildAuthMessage,
 };

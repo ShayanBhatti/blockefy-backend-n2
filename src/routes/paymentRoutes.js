@@ -16,7 +16,11 @@ const webhookLimit = createRateLimiter({ windowMs: 60_000, max: 60, keyFn: (req)
 // Raw body for signature verification.
 router.post("/webhook", webhookLimit, express.raw({ type: "*/*" }), paymentController.webhook);
 
-// Dev-only helper to sanity check signatures.
-router.post("/webhook/dev-verify", express.raw({ type: "*/*" }), paymentController.devVerify);
+// Dev-only helper to sanity check signatures. Registered only OUTSIDE
+// production: in production the verifier is an oracle an attacker could use to
+// validate forged signatures for free (F17).
+if (process.env.NODE_ENV !== "production") {
+  router.post("/webhook/dev-verify", express.raw({ type: "*/*" }), paymentController.devVerify);
+}
 
 module.exports = router;
