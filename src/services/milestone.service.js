@@ -218,17 +218,24 @@ const submitMilestone = async ({ milestoneId, user, data }) => {
       label: "You",
     });
     if (submitKey.actorKey) {
-      await chainService.relayCallAs({
-        actorKey: submitKey.actorKey,
-        method: "completeMilestone",
-        args: [project.onChainProjectId, milestone.onChainMilestoneId],
-        context: {
-          userId: user._id,
-          projectId: project._id,
-          milestoneId: milestone._id,
-          description: "Submitted milestone for review",
-        },
-      });
+      try {
+        await chainService.relayCallAs({
+          actorKey: submitKey.actorKey,
+          method: "completeMilestone",
+          args: [project.onChainProjectId, milestone.onChainMilestoneId],
+          context: {
+            userId: user._id,
+            projectId: project._id,
+            milestoneId: milestone._id,
+            description: "Submitted milestone for review",
+          },
+        });
+      } catch (error) {
+        // A retry after a dropped receipt hits "Blockefy: milestone already
+        // submitted" - the chain already has the delivery, so let the DB catch
+        // up instead of failing the resubmit forever.
+        if (!(error?.code === "TX_REVERTED" && /already submitted/i.test(String(error.message || "")))) throw error;
+      }
     }
   }
 
@@ -292,17 +299,21 @@ const resubmitMilestone = async ({ milestoneId, user, data }) => {
       party: "freelancer",
       label: "You",
     });
-    await chainService.relayCallAs({
-      actorKey: resubmitKey,
-      method: "completeMilestone",
-      args: [project.onChainProjectId, milestone.onChainMilestoneId],
-      context: {
-        userId: user._id,
-        projectId: project._id,
-        milestoneId: milestone._id,
-        description: "Resubmitted milestone after revision",
-      },
-    });
+    try {
+      await chainService.relayCallAs({
+        actorKey: resubmitKey,
+        method: "completeMilestone",
+        args: [project.onChainProjectId, milestone.onChainMilestoneId],
+        context: {
+          userId: user._id,
+          projectId: project._id,
+          milestoneId: milestone._id,
+          description: "Resubmitted milestone after revision",
+        },
+      });
+    } catch (error) {
+      if (!(error?.code === "TX_REVERTED" && /already submitted/i.test(String(error.message || "")))) throw error;
+    }
   }
 
   milestone.submission = {

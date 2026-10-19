@@ -56,16 +56,25 @@ const getContractInfo = asyncHandler(async (req, res) => {
     available,
   };
   if (available) {
-    const [blockNumber, projectCounter, milestoneCounter, network] = await Promise.all([
-      chainService.getProvider().getBlockNumber(),
-      chainService.getProjectCounter(),
-      chainService.getMilestoneCounter(),
-      chainService.getProvider().getNetwork().catch(() => null),
-    ]);
-    info.latestBlock = blockNumber;
-    info.projectCounter = projectCounter;
-    info.milestoneCounter = milestoneCounter;
-    info.networkName = network ? network.name : null;
+    // Runs the whole read set through the RPC failover: a single endpoint that
+    // rejects batches (drpc free plan rejects >3) or times out is skipped in
+    // favour of the next endpoint instead of 500'ing the whole request.
+    const gathered = await chainService.withRpcFailover(async (rpc) => {
+      const contract = chainService.getReadContractForRpc(rpc);
+      const [blockNumber, projectCounter, milestoneCounter, network] = await Promise.all([
+        rpc.getBlockNumber(),
+        contract.projectCounter(),
+        contract.milestoneCounter(),
+        rpc.getNetwork().catch(() => null),
+      ]);
+      return {
+        latestBlock: blockNumber,
+        projectCounter: Number(projectCounter),
+        milestoneCounter: Number(milestoneCounter),
+        networkName: network ? network.name : null,
+      };
+    });
+    info = { ...info, ...gathered };
 
     // Bytecode match: a stale Blockefy-address.json after a redeploy shows up
     // here BEFORE any user hits a failed transaction.

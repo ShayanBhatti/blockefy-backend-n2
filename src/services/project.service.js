@@ -292,7 +292,10 @@ const confirmOnChainProject = async ({ user, projectId, txHash }) => {
   if (project.onChainProjectId) {
     return { project, alreadyOnChain: true };
   }
-  const receipt = await chainService.getProvider().getTransactionReceipt(txHash);
+  const receipt = await chainService.getReceiptSafe(
+    chainService.getProvider(),
+    txHash
+  );
   if (!receipt || Number(receipt.status) !== 1) {
     throw new AppError("Transaction not found or failed", 422, "TX_FAILED");
   }

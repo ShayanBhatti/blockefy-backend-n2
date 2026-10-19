@@ -29,6 +29,15 @@ const jobs = require("./src/jobs");
 
 const app = express();
 
+// A flaky RPC node or an unguarded async task must never take the whole API
+// down: log the rejection with context instead of letting the process die.
+process.on("unhandledRejection", (reason) => {
+  console.error("[SERVER] Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[SERVER] Uncaught exception:", error);
+});
+
 // Security headers (helmet)
 app.use(helmet());
 
@@ -123,6 +132,7 @@ app.use("/api", proposalRoutes);
 app.use("/api", milestoneRoutes);
 app.use("/api", escrowRoutes);
 app.use("/api", walletRoutes);
+app.use(walletRoutes);
 
 // 404 for unknown API routes
 app.use("/api", (req, res) => {

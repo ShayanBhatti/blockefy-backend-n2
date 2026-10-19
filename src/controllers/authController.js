@@ -487,7 +487,7 @@ const generateNonceController = async (req, res) => {
     await WalletChallenge.findOneAndUpdate(
       { walletAddress: walletAddress.toLowerCase() },
       { nonce, expiresAt },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
     );
 
     authService.logAuthEvent("Wallet nonce generated", {

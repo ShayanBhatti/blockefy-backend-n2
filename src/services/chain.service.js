@@ -103,6 +103,10 @@ const getProvider = () => getProviderByUrl(RPC_URLS[activeRpcIndex] || RPC_URL);
  */
 const isRpcTransportError = (error) => {
   if (!error) return false;
+  // AppErrors carry a real status (most >= 500) and must NEVER be treated as a
+  // transport fault - re-running the operation on another endpoint would
+  // re-broadcast the same transaction.
+  if (error.isOperational === true || error instanceof AppError) return false;
   const code = String(error.code || "");
   const message = String(error.message || "").toLowerCase();
   const status = Number(error.info?.responseStatus || error.statusCode || 0);
@@ -164,6 +168,10 @@ const getReadContract = () => {
   return readContract;
 };
 
+/** Read-only contract bound to a SPECIFIC rpc - for use inside withRpcFailover. */
+const getReadContractForRpc = (rpc) =>
+  new ethers.Contract(CONTRACT_ADDRESS, contractData.abi, rpc);
+
 const getSignerWithProvider = (privateKey, rpc = getProvider()) =>
   new ethers.Wallet(privateKey, rpc);
 
@@ -217,18 +225,134 @@ const projectStatusToName = (code) => PROJECT_STATUS_MAP[Number(code)] || "unkno
 const projectTypeToName = (code) => PROJECT_TYPE_MAP[Number(code)] || "unknown";
 
 /**
- * Sends a prepared contract call and waits for confirmation.
- *
- * @param {import("ethers").Wallet} signer - Wallet that signs the transaction.
- * @param {(contract: import("ethers").Contract) => Promise<import("ethers").TransactionResponse>} call
- * @param {Object} [opts]
- * @param {number} [opts.confirmations]
- * @returns {Promise<{txHash: string, receipt: import("ethers").TransactionReceipt}>}
+ * Public nodes often answer `eth_getTransactionReceipt` for a not-yet-known
+ * transaction with a hard error (e.g. code 26 "Unknown block") instead of a
+ * null receipt. Normalise that to a plain `null` so callers can treat it as
+ * "not found yet" and keep their existing TX_FAILED/TX_INVALID behaviour.
  */
+const getReceiptSafe = async (provider, txHash, timeoutMs = 20_000) => {
+  try {
+    const receipt = await Promise.race([
+      provider.getTransactionReceipt(txHash),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new AppError("Timed out waiting for the transaction receipt", 504, "TX_RECEIPT_TIMEOUT")), timeoutMs)
+      ),
+    ]);
+    return receipt || null;
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    console.warn(`[CHAIN] receipt lookup failed for ${txHash}: ${error.message}`);
+    return null;
+  }
+};
+
+/**
+ * Decodes a standard solidity revert payload (`Error(string)` / `Panic`) into
+ * a human-readable reason.
+ */
+const decodeRevertReason = (data) => {
+  if (!data || typeof data !== "string") return null;
+  try {
+    const iface = new ethers.Interface(["function Error(string)", "function Panic(uint256)"]);
+    if (/^0x08c379a0/.test(data)) {
+      return String(iface.decodeFunctionData("Error(string)", data)[0]);
+    }
+    if (/^0x4e487b71/.test(data)) {
+      const code = iface.decodeFunctionData("Panic(uint256)", data)[0];
+      return `panic(0x${code.toString(16)})`;
+    }
+  } catch {
+    /* keep null */
+  }
+  return null;
+};
+
+/**
+ * Best-effort replay of a transaction to extract WHY it reverted, so the error
+ * the user sees names the real business condition (e.g. "milestone already
+ * submitted") instead of a bare "reverted".
+ */
+const probeRevertReason = async (provider, tx) => {
+  try {
+    await provider.call({
+      from: tx.from,
+      to: tx.to,
+      data: tx.data,
+      gasLimit: tx.gasLimit,
+      value: tx.value !== null && tx.value !== undefined ? tx.value : 0n,
+    });
+    return null;
+  } catch (error) {
+    const data =
+      error?.data ||
+      error?.info?.error?.data ||
+      (Array.isArray(error?.error) ? null : error?.error?.data) ||
+      null;
+    return decodeRevertReason(data) || String(error?.shortMessage || error?.message || "reverted").slice(0, 200);
+  }
+};
+
+/**
+ * A mined transaction is known to every healthy BSC-testnet node even when the
+ * endpoint that broadcast it refuses to answer (drpc "Unknown block"): polls
+ * the configured RPCs for a receipt so a landed tx is never reported as failed.
+ */
+const findReceiptAcrossRpcs = async (txHash) => {
+  for (const url of RPC_URLS) {
+    const r = await getReceiptSafe(getProviderByUrl(url), txHash, 8_000);
+    if (r) return r;
+  }
+  return null;
+};
 const sendContractCall = async (signer, call, opts = {}) => {
   const contract = getContract(signer);
   const tx = await call(contract);
-  const receipt = await tx.wait(opts.confirmations || CONFIRMATIONS);
+  let receipt;
+  try {
+    // `wait()` throws when the node answers a receipt poll with a hard error
+    // (public BSC testnet nodes return code 26 "Unknown block" for txs they
+    // have dropped or never saw) OR when the tx mined with status 0.
+    receipt = await tx.wait(
+      opts.confirmations || CONFIRMATIONS,
+      opts.timeoutMs || 60_000
+    );
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    const reverted = error?.code === "CALL_EXCEPTION" || /execution reverted|revert/i.test(String(error.message || ""));
+    receipt = receipt || error?.receipt || null;
+
+    if (!receipt) {
+      // The wait failed before any receipt arrived. The tx may still have
+      // landed (public endpoints frequently drop/misreport receipts), so look
+      // it up across every configured endpoint before declaring failure -
+      // otherwise the caller retries and hits a business-level revert.
+      for (let i = 0; i < 3 && !receipt; i += 1) {
+        receipt = await findReceiptAcrossRpcs(tx.hash);
+        if (!receipt) await new Promise((r) => setTimeout(r, 1_500));
+      }
+    }
+
+    if (receipt?.status === 0 || (reverted && !receipt)) {
+      // The tx MINED with status 0 (or the node rejected it at broadcast).
+      // Not a confirmation problem - the call itself was refused on-chain.
+      const reason = await probeRevertReason(signer.provider, tx);
+      throw new AppError(
+        `The blockchain rejected ${tx.hash}: the call reverted on-chain${reason ? ` (${reason})` : ""}.`,
+        422,
+        "TX_REVERTED"
+      );
+    }
+    if (receipt?.status === 1) {
+      // Recovered from a false negative: the tx is mined and confirmed.
+      console.info(`[CHAIN] reconciled: ${tx.hash} confirmed in block ${receipt.blockNumber}`);
+    } else {
+      throw new AppError(
+        `Transaction ${tx.hash} was broadcast but no endpoint reports a receipt yet - it may have been dropped. Verify it on an explorer before retrying.`,
+        504,
+        "TX_RECEIPT_CONFIRMATION_FAILED"
+      );
+    }
+  }
   return { txHash: receipt.hash, receipt };
 };
 
@@ -586,18 +710,19 @@ const assertContractOwnerKey = async (privateKey) => {
  * Full on-chain state of a project, normalized to plain JSON-safe values.
  */
 const getProjectState = async (onChainProjectId) => {
-  const contract = getReadContract();
   await assertChainAvailable();
 
-  try {
-    const [project, milestoneIds, milestonesDetails, escrowWei, reviewLapsed] =
-      await Promise.all([
-        contract.projects(onChainProjectId),
-        contract.getProjectMilestones(onChainProjectId),
-        contract.getMilestonesDetails(onChainProjectId),
-        contract.getProjectEscrow(onChainProjectId),
-        contract.isReviewLapsed(onChainProjectId),
-      ]);
+  return withRpcFailover(async (rpc) => {
+    const contract = getReadContractForRpc(rpc);
+    try {
+      const [project, milestoneIds, milestonesDetails, escrowWei, reviewLapsed] =
+        await Promise.all([
+          contract.projects(onChainProjectId),
+          contract.getProjectMilestones(onChainProjectId),
+          contract.getMilestonesDetails(onChainProjectId),
+          contract.getProjectEscrow(onChainProjectId),
+          contract.isReviewLapsed(onChainProjectId),
+        ]);
 
     const milestones = milestonesDetails.map((m, i) => ({
       id: Number(m.id),
@@ -632,18 +757,20 @@ const getProjectState = async (onChainProjectId) => {
       milestoneIds: milestoneIds.map((id) => Number(id)),
       milestones,
       reviewLapsed,
-    };  } catch (error) {
-    // A missing on-chain record returns empty calldata and fails decoding:
-    // treat it as "project not deployed/funded yet" instead of a 500 so the
-    // client & freelancer views still render.
-    if (
-      /could not decode result data/.test(String(error?.message || "")) ||
-      /Returned values aren't valid/.test(String(error?.message || ""))
-    ) {
-      return null;
+    };
+    } catch (error) {
+      // A missing on-chain record returns empty calldata and fails decoding:
+      // treat it as "project not deployed/funded yet" instead of a 500 so the
+      // client & freelancer views still render.
+      if (
+        /could not decode result data/.test(String(error?.message || "")) ||
+        /Returned values aren't valid/.test(String(error?.message || ""))
+      ) {
+        return null;
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 };
 
 /**
@@ -729,6 +856,8 @@ module.exports = {
   DEFAULT_GAS_LIMIT,
   getProvider,
   getReadContract,
+  getReadContractForRpc,
+  withRpcFailover,
   getSigner,
   getContract,
   isChainAvailable,
@@ -743,6 +872,7 @@ module.exports = {
   projectStatusToName,
   projectTypeToName,
   sendContractCall,
+  getReceiptSafe,
   relayCall,
   relayCallAs,
   getExternalNonce,
